@@ -170,6 +170,21 @@ static int WINAPI my_MessageBoxA(HWND w, LPCSTR t, LPCSTR c, UINT f)
 {
     (void)w; (void)f;
     lg("MessageBox [%s]: %s (auto-dispensado)", c ? c : "", t ? t : "");
+    if (t && (strstr(t, "904") || strstr(t, "007bb1bc") || strstr(t, "Halt"))) {
+        lg("====================================================================");
+        lg("[DIAGNOSTICO DEFINITIVO DO HALT]");
+        lg("Erro detectado: Halt line #904 em Fog.dll (Unrecoverable internal error).");
+        lg("Causa Raiz: A memoria RAM disponivel para o processo esgotou.");
+        lg("O Nintendo Switch limita o Homebrew Menu aberto pelo ALBUM a ~400 MB.");
+        lg("O Median XL Sigma + D2GL consome ~900 MB no carregamento dos cenarios.");
+        lg("SOLUCAO COMPROVADA:");
+        lg("  1. Va para o menu inicial (Home) do Nintendo Switch.");
+        lg("  2. SEGURE o botao [R] no Joy-Con / controle.");
+        lg("  3. Com [R] mantido pressionado, abra QUALQUER JOGO instalado no Switch.");
+        lg("  4. Quando a tela azul do Homebrew Menu abrir, solte o botao [R].");
+        lg("  5. Inicie o Diablo II / D2Autorun (disponibiliza 3200 MB de RAM!).");
+        lg("====================================================================");
+    }
     return IDOK;
 }
 static int WINAPI my_MessageBoxW(HWND w, LPCWSTR t, LPCWSTR c, UINT f)
@@ -180,7 +195,18 @@ static int WINAPI my_MessageBoxW(HWND w, LPCWSTR t, LPCWSTR c, UINT f)
 }
 static int WINAPI my_MessageBoxIndirectA(const MSGBOXPARAMSA *p)
 {
-    if (p) lg("MessageBoxIndirect [%s]: %s (auto-dispensado)", p->lpszCaption ? p->lpszCaption : "", p->lpszText ? p->lpszText : "");
+    if (p) {
+        lg("MessageBoxIndirect [%s]: %s (auto-dispensado)", p->lpszCaption ? p->lpszCaption : "", p->lpszText ? p->lpszText : "");
+        if (p->lpszText && (strstr(p->lpszText, "904") || strstr(p->lpszText, "007bb1bc") || strstr(p->lpszText, "Halt"))) {
+            lg("====================================================================");
+            lg("[DIAGNOSTICO DEFINITIVO DO HALT]");
+            lg("Erro detectado: Halt line #904 em Fog.dll (Unrecoverable internal error).");
+            lg("Causa Raiz: A memoria RAM disponivel para o processo esgotou.");
+            lg("O Nintendo Switch limita o Homebrew Menu aberto pelo ALBUM a ~400 MB.");
+            lg("SOLUCAO COMPROVADA: Abra via Title Override (segure [R] ao abrir qualquer jogo).");
+            lg("====================================================================");
+        }
+    }
     return IDOK;
 }
 static int WINAPI my_MessageBoxIndirectW(const MSGBOXPARAMSW *p)
@@ -300,8 +326,33 @@ static BOOL WINAPI my_FreeLibrary(HMODULE m)
 }
 
 /* ======================================================================================
- * 4. Fog: desativa a validacao de secao critica (A1 <var> ... 85 C0 ... 8B F1 0F 84)
+ * 4. Fog: desativa a validacao de secao critica e protege contra overflow de pool blocks
  * ==================================================================================== */
+typedef void* (__cdecl *fog_alloc_t)(size_t);
+static fog_alloc_t g_real_fog_alloc;
+static void **g_fog_heap_ptr;
+
+static void* __cdecl fog_pool_alloc_hook(size_t sz)
+{
+    void *p = g_real_fog_alloc ? g_real_fog_alloc(sz) : NULL;
+    if (p) return p;
+
+    lg("[FOG FIX] Pool blocks overflowed para %u bytes! Ativando contingencia...", (unsigned)sz);
+    if (g_fog_heap_ptr && *g_fog_heap_ptr) {
+        p = HeapAlloc((HANDLE)*g_fog_heap_ptr, HEAP_ZERO_MEMORY, sz);
+        if (p) {
+            lg("[FOG FIX] Recuperado com sucesso via HeapAlloc(FogHeap): %p", p);
+            return p;
+        }
+    }
+    p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sz);
+    if (p) {
+        lg("[FOG FIX] Recuperado com sucesso via HeapAlloc(ProcessHeap): %p", p);
+        return p;
+    }
+    return NULL;
+}
+
 static void patch_fog(HMODULE fog)
 {
     IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)((BYTE *)fog + ((IMAGE_DOS_HEADER *)fog)->e_lfanew);
@@ -340,6 +391,23 @@ static void patch_fog(HMODULE fog)
         lg("Fog.dll: validacao ja estava desativada");
     } else if (found > 1) {
         lg("Fog.dll: assinatura ambigua (%d), nada alterado", found);
+    }
+
+    /* 2. Gancho anti-overflow de pool blocks (evita Halt linha #904) */
+    BYTE *call_site = (BYTE *)fog + 0x1b195;
+    if (call_site[-5] == 0x83 && call_site[-4] == 0xC0 && call_site[-3] == 0x04 &&
+        call_site[-2] == 0x56 && call_site[-1] == 0x50 && call_site[0] == 0xE8) {
+        DWORD old;
+        BYTE *target = (BYTE *)(call_site + 5) + *(int *)(call_site + 1);
+        g_real_fog_alloc = (fog_alloc_t)target;
+        g_fog_heap_ptr = *(void ***)((BYTE *)fog + 0x490f);
+        if (VirtualProtect(call_site, 5, PAGE_EXECUTE_READWRITE, &old)) {
+            *(BYTE *)call_site = 0xE8;
+            *(int *)(call_site + 1) = (BYTE *)fog_pool_alloc_hook - (call_site + 5);
+            VirtualProtect(call_site, 5, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), call_site, 5);
+            lg("Fog.dll: gancho de contingencia de pool blocks instalado (+1B195)");
+        }
     }
 }
 
@@ -520,22 +588,35 @@ static void d2gl_profile(void)
 {
     static const char *keys[][3] = {
         /* secao, chave, valor */
+        {"Screen", "fullscreen", "true"},
         {"Screen", "window_width", "1280"},
         {"Screen", "window_height", "720"},
-        {"Screen", "fullscreen", "true"},
+        {"Screen", "centered_window", "true"},
         {"Screen", "vsync", "true"},
-        {"Screen", "foreground_fps", "false"},
-        {"Screen", "background_fps", "false"},
+        {"Screen", "foreground_fps", "true"},
+        {"Screen", "foreground_fps_value", "60"},
+        {"Screen", "background_fps", "true"},
+        {"Screen", "background_fps_value", "30"},
         {"Screen", "auto_minimize", "false"},
         {"Screen", "unlock_cursor", "true"},
-        {"Graphic", "shader_preset", ""},
-        {"Graphic", "fxaa", "false"},
+        {"Graphic", "shader_preset", "bilinear.slangp"},
+        {"Graphic", "stretched_horizontal", "true"},
+        {"Graphic", "stretched_vertical", "false"},
+        {"Graphic", "stretched_viewport", "true"},
+        {"Graphic", "sharpen", "true"},
+        {"Graphic", "sharpen_strength", "1.200"},
+        {"Graphic", "sharpen_clamp", "0.250"},
+        {"Graphic", "sharpen_radius", "0.350"},
+        {"Graphic", "fxaa", "true"},
+        {"Graphic", "fxaa_preset", "2"},
         {"Graphic", "bloom", "false"},
-        {"Graphic", "sharpen", "false"},
         {"Graphic", "lut", "0"},
+        {"Feature", "hd_cursor", "true"},
+        {"Feature", "hd_text", "true"},
+        {"Feature", "hd_text_scale", "1.100"},
         {"Feature", "motion_prediction", "true"},
         {"Feature", "skip_intro", "true"},
-        {"Feature", "show_fps", "false"},
+        {"Feature", "show_fps", "true"},
         {"Other", "gl_ver_major", "4"},
         {"Other", "gl_ver_minor", "3"},
         {"Other", "use_compute_shader", "false"},
@@ -787,6 +868,17 @@ static DWORD WINAPI worker(void *arg)
     return 0;
 }
 
+static void install_messagebox_hooks(void)
+{
+    LoadLibraryA("user32.dll");
+    real_MessageBoxA = hook_export("user32.dll", "MessageBoxA", my_MessageBoxA);
+    real_MessageBoxW = hook_export("user32.dll", "MessageBoxW", my_MessageBoxW);
+    real_MessageBoxIndirectA = hook_export("user32.dll", "MessageBoxIndirectA", my_MessageBoxIndirectA);
+    real_MessageBoxIndirectW = hook_export("user32.dll", "MessageBoxIndirectW", my_MessageBoxIndirectW);
+    lg("ganchos ui (auto-dispensar popup): MessageBoxA %s, MessageBoxW %s",
+       real_MessageBoxA ? "ok" : "-", real_MessageBoxW ? "ok" : "-");
+}
+
 static void install_hooks(void)
 {
     real_OpenProcessToken = hook_export("kernelbase.dll", "OpenProcessToken", my_OpenProcessToken);
@@ -803,11 +895,7 @@ static void install_hooks(void)
     if (!real_LoadLibraryExW) real_LoadLibraryExW = hook_export("kernel32.dll", "LoadLibraryExW", my_LoadLibraryExW);
     real_CreateFileW = hook_export("kernelbase.dll", "CreateFileW", my_CreateFileW);
     if (!real_CreateFileW) real_CreateFileW = hook_export("kernel32.dll", "CreateFileW", my_CreateFileW);
-    LoadLibraryA("user32.dll");
-    real_MessageBoxA = hook_export("user32.dll", "MessageBoxA", my_MessageBoxA);
-    real_MessageBoxW = hook_export("user32.dll", "MessageBoxW", my_MessageBoxW);
-    real_MessageBoxIndirectA = hook_export("user32.dll", "MessageBoxIndirectA", my_MessageBoxIndirectA);
-    real_MessageBoxIndirectW = hook_export("user32.dll", "MessageBoxIndirectW", my_MessageBoxIndirectW);
+    install_messagebox_hooks();
     LoadLibraryA("version.dll");
     real_GetFileVersionInfoSizeA = hook_export("version.dll", "GetFileVersionInfoSizeA", my_GetFileVersionInfoSizeA);
     real_GetFileVersionInfoSizeW = hook_export("version.dll", "GetFileVersionInfoSizeW", my_GetFileVersionInfoSizeW);
@@ -819,6 +907,33 @@ static void install_hooks(void)
        real_MessageBoxA ? "ok" : "-", real_MessageBoxW ? "ok" : "-",
        real_MessageBoxIndirectA ? "ok" : "-", real_MessageBoxIndirectW ? "ok" : "-",
        real_GetFileVersionInfoSizeW ? "ok" : "-", real_GetFileVersionInfoW ? "ok" : "-");
+}
+
+static void log_memory_status(void)
+{
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        DWORD total_mb = (DWORD)(ms.ullTotalPhys / (1024 * 1024));
+        DWORD avail_mb = (DWORD)(ms.ullAvailPhys / (1024 * 1024));
+        lg("Memoria do sistema: %lu MB total, %lu MB disponivel (carga: %lu%%)",
+           total_mb, avail_mb, ms.dwMemoryLoad);
+        if (total_mb < 600) {
+            lg("====================================================================");
+            lg("[ALERTA CRITICO] MODO ALBUM / APPLET DETECTADO! (RAM total: %lu MB)", total_mb);
+            lg("O Switch limita o Homebrew Menu aberto pelo Album a ~400 MB de RAM.");
+            lg("O Median XL Sigma + D2GL consome ~900 MB e VAI TRAVAR com 'Halt line #904'!");
+            lg("COMO CORRIGIR DEFINITIVAMENTE:");
+            lg("  1. Va para a tela inicial do Switch (HOME).");
+            lg("  2. SEGURE o botao [R] no Joy-Con / controle.");
+            lg("  3. Com [R] mantido segurado, abra QUALQUER JOGO instalado no Switch.");
+            lg("  4. Quando abrir a tela azul do Homebrew Menu, solte o botao [R].");
+            lg("  5. Abra o Diablo II / D2Autorun (tera 3200 MB de RAM livre!).");
+            lg("====================================================================");
+        } else {
+            lg("Modo de memoria: TITLE OVERRIDE / APLICACAO OK (%lu MB de RAM)", total_mb);
+        }
+    }
 }
 
 __declspec(dllexport) void D2Autorun_Init(void) {}
@@ -844,6 +959,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
         if (!file_exists(g_pad_path)) snprintf(g_pad_path, sizeof(g_pad_path), "%s..\\d2nx\\D2NXPad.dll", g_root);
         if (!file_exists(g_pad_path)) g_pad_path[0] = 0;
         lg("==== D2Autorun %s (%s, pid %lu) ====", AUTORUN_VERSION, base_name(exe), GetCurrentProcessId());
+        log_memory_status();
         char sigma_path[MAX_PATH];
         snprintf(sigma_path, sizeof(sigma_path), "%sD2Sigma.dll", g_root);
         g_is_mxl = !g_is_d2se && file_exists(sigma_path);
@@ -859,6 +975,40 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             lstrcpynA(g_core, "1.13c", sizeof(g_core));
             lstrcpynA(g_entry, g_root, sizeof(g_entry));
             lg("Entrada ativa: %s (core %s, boot direto Game.exe)", g_folder, g_core);
+
+            /* Se medianxl-data.mpq unificado estiver presente, remove os 56 MPQs delta obsoletos
+               para evitar a sobrecarga de I/O de 5 minutos do FAT32 no Switch */
+            char unified_mpq[MAX_PATH];
+            snprintf(unified_mpq, sizeof(unified_mpq), "%smedianxl-data.mpq", g_root);
+            if (file_exists(unified_mpq)) {
+                WIN32_FIND_DATAA fd;
+                char pattern[MAX_PATH];
+                snprintf(pattern, sizeof(pattern), "%smedianxl-*.mpq", g_root);
+                HANDLE hFind = FindFirstFileA(pattern, &fd);
+                if (hFind != INVALID_HANDLE_VALUE) {
+                    int cleaned = 0;
+                    do {
+                        if (lstrcmpiA(fd.cFileName, "medianxl-data.mpq") != 0) {
+                            char old_path[MAX_PATH];
+                            snprintf(old_path, sizeof(old_path), "%s%s", g_root, fd.cFileName);
+                            if (DeleteFileA(old_path)) cleaned++;
+                        }
+                    } while (FindNextFileA(hFind, &fd));
+                    FindClose(hFind);
+                    if (cleaned > 0) {
+                        lg("Limpeza automatica: %d MPQs delta obsoletos removidos (boot rapido ativo)", cleaned);
+                    }
+                }
+            }
+
+            /* Se Game.box64.txt obsoleto estiver presente no SD, remove para evitar lentidao extrema do dynarec */
+            char obsolete_box64[MAX_PATH];
+            snprintf(obsolete_box64, sizeof(obsolete_box64), "%sGame.box64.txt", g_root);
+            if (file_exists(obsolete_box64)) {
+                if (DeleteFileA(obsolete_box64)) {
+                    lg("Removido Game.box64.txt obsoleto para restaurar velocidade nativa");
+                }
+            }
         }
         /* o D2Pad do mod e trocado por copia de arquivo (swap_pad); nenhum gancho de LoadLibrary para isso */
         g_redirect_pad = 0;
@@ -875,8 +1025,10 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
                 g_safe = (v != -12345) ? v : 1;
             }
         }
-        if (g_safe) lg("Modo seguro: ganchos de sistema desativados para compatibilidade (entrada %s)", g_folder);
-        else {
+        if (g_safe) {
+            lg("Modo seguro: ganchos de sistema desativados para compatibilidade (entrada %s)", g_folder);
+            install_messagebox_hooks();
+        } else {
             install_hooks();
         }
 

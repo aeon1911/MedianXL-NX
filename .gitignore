@@ -11,6 +11,9 @@
 *.tmp
 
 # Strictly ignore Blizzard proprietary Diablo II LoD files
+*.mpq
+*.MPQ
+medianxl-data.mpq
 Game.exe
 game.exe
 GAME.EXE
@@ -60,6 +63,12 @@ DIABLO II.EXE
 D2VidTst.exe
 d2vidtst.exe
 *.exe.orig
+D2.LNG
+d2.lng
+*.LNG
+*.lng
+default.key
+*.key
 
 # Local paths / IDE
 /config/local.ini
@@ -91,3 +100,4 @@ __pycache__/
 /tools/build_host.sh
 src-d2nx/*.dll
 src-d2nx/tests/*.dll
+tools/merge_mpqs

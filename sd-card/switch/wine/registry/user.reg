@@ -178,6 +178,11 @@ WINE REGISTRY Version 2
 "ddraw"="builtin"
 "glide3x"="native"
 
+[Software\\Wine\\AppDefaults\\Game.exe\\DllOverrides] 1792479171
+#time=1dd605f9fcaa380
+"ddraw"="native,builtin"
+"glide3x"="native"
+
 [Software\\Wine\\DllOverrides] 1792450320
 #time=1dd601c73416800
 

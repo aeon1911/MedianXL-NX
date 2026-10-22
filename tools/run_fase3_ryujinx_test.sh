@@ -18,8 +18,10 @@ rm -f build/ryujinx-test/sdcard/switch/wine/run-next.txt.previous
 
 echo "Ponteiro run-next.txt: $(cat build/ryujinx-test/sdcard/switch/wine/run-next.txt)"
 
-# 3. Habilitar telemetria de profiling para monitorar frames
+# 3. Habilitar telemetria de profiling para monitorar frames e ativar AutoTest no Ryujinx
 touch build/ryujinx-test/sdcard/switch/wine/profile.txt
+sed -i 's/AutoJoin=0/AutoJoin=1/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
+sed -i 's/AutoWalk=0/AutoWalk=1/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
 
 # 4. Iniciar Ryujinx
 echo "Iniciando Ryujinx..."
@@ -44,6 +46,8 @@ last_rt = ""
 last_d2 = ""
 last_pad = ""
 success = False
+in_game = False
+in_game_time = 0
 
 while time.time() - start < 180:
     time.sleep(3)
@@ -80,9 +84,15 @@ while time.time() - start < 180:
         if lines and lines[-1].strip() != last_pad:
             print(f"T={elapsed:5.1f}s [PAD]: {lines[-1].strip()}", flush=True)
             last_pad = lines[-1].strip()
+        for l in lines:
+            if "SUCESSO: Personagem entrou no jogo" in l:
+                if not in_game:
+                    print(f"*** JOGABILIDADE CONFIRMADA: {l.strip()} ***", flush=True)
+                    in_game = True
+                    in_game_time = elapsed
 
-    if success and elapsed > 20:
-        print("Sucesso confirmado: D2 Sigma + Autorun renderizando frames estaveis!", flush=True)
+    if in_game and (elapsed - in_game_time > 15):
+        print(f"Sucesso Total: Personagem jogavel e movimentando no mundo por mais de 15 segundos!", flush=True)
         break
 
 print("Fim da janela de monitoramento.")

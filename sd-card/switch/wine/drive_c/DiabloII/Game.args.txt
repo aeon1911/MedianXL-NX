@@ -1,1 +1,1 @@
--w -3dfx
+-3dfx -log

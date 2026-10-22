@@ -50,7 +50,7 @@ def validate_tree():
         os.path.join(d2_dir, "D2Autorun.dll"),
         os.path.join(d2_dir, "Fog.dll"),
         os.path.join(d2_dir, "D2Sigma.dll"),
-        os.path.join(d2_dir, "d2fps.dll"),
+        os.path.join(d2_dir, "medianxl-data.mpq"),
         os.path.join(d2_dir, "glide3x.dll"),
         os.path.join(d2_dir, "d2gl.mpq"),
         os.path.join(d2_dir, "d2gl.ini"),
@@ -72,7 +72,7 @@ def validate_tree():
 
     with open(os.path.join(d2_dir, "Game.args.txt"), "r") as f:
         args = f.read().strip()
-        assert "-w -3dfx" in args, f"Game.args.txt invalido: {args}"
+        assert "-3dfx" in args and "-w" not in args, f"Game.args.txt invalido (D2GL exige tela cheia sem -w): {args}"
 
     # Verificacao de proibicoes estritas
     forbidden_global = ["D2SE.exe", "D2SE", "MODS", "PlugY", "ProjectD2"]

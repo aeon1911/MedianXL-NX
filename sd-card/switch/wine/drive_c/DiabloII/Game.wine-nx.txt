@@ -1,1 +1,3 @@
 title=Median XL Sigma 2.14.6
+verbose=0
+profile=0

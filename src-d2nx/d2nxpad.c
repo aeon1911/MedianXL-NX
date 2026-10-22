@@ -76,7 +76,7 @@ enum Btn { B_A, B_B, B_X, B_Y, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_L3, B_R3
 static const char *btn_names[B_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
                                           "L3", "R3", "Up", "Down", "Left", "Right" };
 enum ActKind { A_NONE, A_ATTACK, A_SKILL, A_RIGHT, A_KEY, A_HOLD, A_LCLICK, A_RCLICK, A_SHIFTCLICK,
-               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L };
+               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME };
 typedef struct { BYTE kind; BYTE vk; BYTE mods; BYTE n; } Act;  /* mods: 1 shift 2 ctrl 4 alt */
 enum Ctx { C_GAME, C_LAYER, C_PLUS, C_PANEL, C_MENU, C_COUNT };
 static const char *ctx_names[C_COUNT] = { "Jogo", "Jogo.ZL", "Jogo.Mais", "Painel", "Menu" };
@@ -225,6 +225,8 @@ static const char *default_ini =
 "Minus=KEY:ESC\n"
 "L=KEY:SHIFT\n"
 "R=KEY:TAB\n"
+"L3=TYPENAME\n"
+"R3=TYPENAME\n"
 "Up=KEY:UP\n"
 "Down=KEY:DOWN\n"
 "Left=KEY:LEFT\n"
@@ -273,6 +275,7 @@ static Act parse_act(const char *v)
     else if (!lstrcmpiA(buf, "NAV")) a.kind = A_NAV;
     else if (!lstrcmpiA(buf, "POPUP_R")) a.kind = A_POPUP_R;
     else if (!lstrcmpiA(buf, "POPUP_L")) a.kind = A_POPUP_L;
+    else if (!lstrcmpiA(buf, "TYPENAME")) a.kind = A_TYPENAME;
     else if (!strncasecmp(buf, "KEY:", 4) || !strncasecmp(buf, "HOLD:", 5)) {
         char *k = buf + (buf[0] == 'K' || buf[0] == 'k' ? 4 : 5);
         a.kind = (buf[0] == 'K' || buf[0] == 'k') ? A_KEY : A_HOLD;
@@ -480,7 +483,8 @@ static void tap_key(int vk, int mods)
     send_key(vk, 1);
     if (g_hwnd) {
         PostMessageA(g_hwnd, WM_KEYDOWN, vk, 0);
-        if (vk >= 'A' && vk <= 'Z') PostMessageA(g_hwnd, WM_CHAR, vk + 32, 0);
+        if (vk >= 'A' && vk <= 'Z') PostMessageA(g_hwnd, WM_CHAR, (mods & 1) ? vk : (vk + 32), 0);
+        else if (vk >= '0' && vk <= '9') PostMessageA(g_hwnd, WM_CHAR, vk, 0);
         else if (vk == VK_RETURN) PostMessageA(g_hwnd, WM_CHAR, '\r', 0);
     }
     Sleep(35);
@@ -489,6 +493,21 @@ static void tap_key(int vk, int mods)
         PostMessageA(g_hwnd, WM_KEYUP, vk, 0xC0000001);
     }
     key_mods(mods, 0);
+}
+
+static void type_string(const char *s)
+{
+    while (*s) {
+        char c = *s++;
+        int vk = 0, shift = 0;
+        if (c >= 'a' && c <= 'z') { vk = c - 'a' + 'A'; shift = 0; }
+        else if (c >= 'A' && c <= 'Z') { vk = c; shift = 1; }
+        else if (c >= '0' && c <= '9') { vk = c; shift = 0; }
+        if (vk) {
+            tap_key(vk, shift ? 1 : 0);
+            Sleep(40);
+        }
+    }
 }
 
 static void send_mouse_abs(int sx, int sy)
@@ -505,7 +524,6 @@ static void send_mouse_abs(int sx, int sy)
     in.mi.dy = (LONG)(((sy - vy) * 65535.0 + vh / 2) / (vh - 1));
     in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     SendInput(1, &in, sizeof(in));
-    mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, in.mi.dx, in.mi.dy, 0, 0);
 }
 static void send_button(int right, int down)
 {
@@ -515,7 +533,6 @@ static void send_button(int right, int down)
     in.mi.dwFlags = right ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
                           : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);
     SendInput(1, &in, sizeof(in));
-    mouse_event(in.mi.dwFlags, 0, 0, 0, 0);
     if (right) g_rbtn = down; else g_lbtn = down;
 }
 
@@ -555,10 +572,18 @@ static void fallback_mapping(void)
     ClientToScreen(g_hwnd, &p);
     w = (float)(rc.right - rc.left); h = (float)(rc.bottom - rc.top);
     if (w < 16 || h < 16) { w = (float)g_resx; h = (float)g_resy; }
-    s = w / g_resx < h / g_resy ? w / g_resx : h / g_resy;
-    g_sx = g_sy = s;
-    g_ox = p.x + (w - g_resx * s) / 2;
-    g_oy = p.y + (h - g_resy * s) / 2;
+    if (w >= 1200 && h >= 700 && fabsf((w / h) - (16.0f / 9.0f)) < 0.2f) {
+        /* 16:9 widescreen no Switch (ex: 1280x720) com D2GL esticado: preenche tela inteira sem offset fantasma */
+        g_sx = w / (float)g_resx;
+        g_sy = h / (float)g_resy;
+        g_ox = (float)p.x;
+        g_oy = (float)p.y;
+    } else {
+        s = w / g_resx < h / g_resy ? w / g_resx : h / g_resy;
+        g_sx = g_sy = s;
+        g_ox = p.x + (w - g_resx * s) / 2;
+        g_oy = p.y + (h - g_resy * s) / 2;
+    }
 }
 
 static void game_to_screen(float gx, float gy, int *sx, int *sy)
@@ -619,7 +644,7 @@ static void calibrate_tick(void)
         }
     }
     if (g_cal_ok && EqualRect(&rc, &g_cal_rect) && g_cal_resx == g_resx && g_cal_resy == g_resy) return;
-    if (!g_ver || (!g_ver->mouse_x && !g_ver->f_mouse_x)) {
+    if (!g_player || !g_ver || (!g_ver->mouse_x && !g_ver->f_mouse_x)) {
         fallback_mapping();
         g_cal_ok = 1; g_cal_rect = rc; g_cal_resx = g_resx; g_cal_resy = g_resy;
         return;
@@ -1216,6 +1241,7 @@ static void start_action(int b, Act a)
     case A_POPUP_R: do_popup(1); h->active = 0; break;
     case A_POPUP_L: do_popup(0); h->active = 0; break;
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
+    case A_TYPENAME: type_string("Switch"); h->active = 0; break;
     default: h->active = 0; break;
     }
 }

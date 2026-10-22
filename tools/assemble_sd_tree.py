@@ -51,6 +51,11 @@ def clean_obsolete(target_d2):
         "d2gl.mpq.autorun*",
         "glide3x.dll.autorun*",
         "run-next.txt.previous",
+        "d2fps.dll*",
+        "ddraw.dll",
+        "DDRAW.dll",
+        "DDraw.dll",
+        "d2fps.ini*",
         "Patch_D2.mpq",
         "D2XMUSIC.MPQ",
         "D2XVIDEO.MPQ"
@@ -58,6 +63,13 @@ def clean_obsolete(target_d2):
     for pat in obsolete_patterns:
         for f in glob.glob(os.path.join(target_d2, pat)):
             log(f"  Removendo arquivo: {os.path.basename(f)}")
+            try: os.remove(f)
+            except Exception: pass
+
+    # Remover MPQs delta legados do Median XL quando unificado estiver presente
+    for f in glob.glob(os.path.join(target_d2, "medianxl-*.mpq")):
+        if os.path.basename(f) != "medianxl-data.mpq":
+            log(f"  Removendo MPQ delta obsoleto: {os.path.basename(f)}")
             try: os.remove(f)
             except Exception: pass
             
@@ -83,9 +95,7 @@ def deploy_game_files(target_d2):
         "D2Autorun.dll",      # v0.4.4
         "Fog.dll",            # Patched sem o bug de critical section
         "D2Sigma.dll",        # Median XL 2.14.6
-        "d2fps.dll",
         "glide3x.dll",        # D2GL OpenGL wrapper
-        "ddraw.dll",
         "d2gl.mpq",
         "d2gl.ini",
         "lootfilterconf.json", # [] para prevencao de crash do D2Sigma
@@ -131,10 +141,21 @@ def deploy_game_files(target_d2):
     shutil.copy2(os.path.join(SRC_GAME, "d2nx/d2nxpad.ini"), os.path.join(target_d2, "d2nx/d2nxpad.ini"))
 
     # 4. Criar configuracoes de boot do AUTORUN
+    # D2GL exige modo de tela cheia (-3dfx -log). O parametro -w forca janela GDI legado,
+    # causando conflito com o renderizador OpenGL EGL do Wine-NX no hardware real do Switch.
     args_path = os.path.join(target_d2, "Game.args.txt")
     with open(args_path, "w", encoding="utf-8") as f:
-        f.write("-w -3dfx\n")
-    log("  Criado Game.args.txt (-w -3dfx)")
+        f.write("-3dfx -log\n")
+    log("  Criado Game.args.txt (-3dfx -log)")
+
+    # Remover Game.box64.txt customizado: STRONGMEM=3 e WEAKBARRIER=0 inserem barreiras de memoria
+    # pesadas em quase todas as instrucoes no ARM64 do Switch, degradando o I/O e a taxa de quadros
+    # (causando travamento de 5 minutos no boot da GPU/Storm.dll). O Box64 do Wine-NX ja possui
+    # configuracao padrao otimizada para o Tegra X1.
+    box64_path = os.path.join(target_d2, "Game.box64.txt")
+    if os.path.exists(box64_path):
+        os.remove(box64_path)
+        log("  Removido Game.box64.txt obsoleto")
 
     wine_nx_path = os.path.join(target_d2, "Game.wine-nx.txt")
     with open(wine_nx_path, "w", encoding="utf-8") as f:
@@ -168,6 +189,8 @@ def configure_launcher(wine_dir):
     launcher_ini = os.path.join(wine_dir, "launcher-library-v2.ini")
     with open(launcher_ini, "w", encoding="utf-8") as f:
         f.write("version=3\n\n[game 1]\npath=sdmc:/switch/wine/drive_c/DiabloII/Game.exe\ntitle=Median XL Sigma 2.14.6\nadded-order=1\nlaunched-order=1\nfavorite=1\n")
+    # telemetria [PROGRESS]/[THREADS]/[STALL] no logs/Game.log do console
+    open(os.path.join(wine_dir, "profile.txt"), "w").close()
     log("  Launcher configurado para boot direto de Game.exe.")
 
 def patch_wine_registry(reg_dir):
@@ -246,6 +269,16 @@ def main():
         create_ryu_case_symlinks(RYU_D2)
         configure_launcher(RYU_WINE)
         patch_wine_registry(os.path.join(RYU_WINE, "registry"))
+
+    # 3. Sincronizar em sd-card/
+    ROOT_WINE = os.path.join(BASE_DIR, "sd-card/switch/wine")
+    ROOT_D2 = os.path.join(ROOT_WINE, "drive_c/DiabloII")
+    if os.path.exists(ROOT_WINE):
+        log("Sincronizando arvore sd-card/ raiz...")
+        clean_obsolete(ROOT_D2)
+        deploy_game_files(ROOT_D2)
+        configure_launcher(ROOT_WINE)
+        patch_wine_registry(os.path.join(ROOT_WINE, "registry"))
         
     log("=== Montagem da arvore SD concluida com sucesso! ===")
 
