@@ -101,3 +101,4 @@ __pycache__/
 src-d2nx/*.dll
 src-d2nx/tests/*.dll
 tools/merge_mpqs
+tools/update_gameplay_tables

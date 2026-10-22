@@ -93,9 +93,21 @@ static struct {
     int panel_shift;
     int skill_delay_ms;
     int autojoin, autowalk;
+    float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
+    int start_gold;
 } cfg;
 
 static const char *default_ini =
+"; ============================================================================\n"
+"; [Gameplay] - Modificadores de Experiencia, Queda de Itens e Ouro\n"
+"; ============================================================================\n"
+"[Gameplay]\n"
+"MultiplicadorXP=2.0\n"
+"MultiplicadorRunas=2.0\n"
+"MultiplicadorUnicos=1.5\n"
+"MultiplicadorRaros=1.5\n"
+"OuroInicial=10000\n"
+"\n"
 "; ============================================================================\n"
 "; D2NXPad " PAD_VERSION " - controle estilo Diablo II Resurrected (Nintendo Switch)\n"
 "; Botoes com nomes do Switch (posicionais). Apague para restaurar o padrao.\n"
@@ -342,6 +354,13 @@ static void load_config(void)
     cfg.autojoin = ini_int("AutoTest", "AutoJoin", 0);
     cfg.autowalk = ini_int("AutoTest", "AutoWalk", 0);
     if (cfg.autojoin || cfg.autowalk) lg("AutoTest ativo: autojoin=%d autowalk=%d", cfg.autojoin, cfg.autowalk);
+    cfg.xp_multiplier = ini_float("Gameplay", "MultiplicadorXP", 2.0f);
+    cfg.rune_multiplier = ini_float("Gameplay", "MultiplicadorRunas", 2.0f);
+    cfg.unique_multiplier = ini_float("Gameplay", "MultiplicadorUnicos", 1.5f);
+    cfg.rare_multiplier = ini_float("Gameplay", "MultiplicadorRaros", 1.5f);
+    cfg.start_gold = ini_int("Gameplay", "OuroInicial", 10000);
+    lg("Gameplay ativo: XP=%.1fx, Runas=%.1fx, Unicos=%.1fx, Raros=%.1fx, Ouro=%d",
+       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
     for (c = 0; c < C_COUNT; c++)
         for (b = 0; b < B_COUNT; b++) {
             char v[64];

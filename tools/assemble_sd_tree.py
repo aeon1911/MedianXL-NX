@@ -145,8 +145,8 @@ def deploy_game_files(target_d2):
     # causando conflito com o renderizador OpenGL EGL do Wine-NX no hardware real do Switch.
     args_path = os.path.join(target_d2, "Game.args.txt")
     with open(args_path, "w", encoding="utf-8") as f:
-        f.write("-3dfx -log\n")
-    log("  Criado Game.args.txt (-3dfx -log)")
+        f.write("-3dfx -direct -log\n")
+    log("  Criado Game.args.txt (-3dfx -direct -log)")
 
     # Remover Game.box64.txt customizado: STRONGMEM=3 e WEAKBARRIER=0 inserem barreiras de memoria
     # pesadas em quase todas as instrucoes no ARM64 do Switch, degradando o I/O e a taxa de quadros
@@ -280,6 +280,14 @@ def main():
         configure_launcher(ROOT_WINE)
         patch_wine_registry(os.path.join(ROOT_WINE, "registry"))
         
+    # 4. Atualizar tabelas de gameplay (XP, Runas, Drops, Ouro) em data/global/excel/ via -direct
+    from patch_gameplay import patch_tables
+    ini_file = os.path.join(ROOT_D2, "d2nx/d2nxpad.ini")
+    for d in [DIST_D2, RYU_D2, ROOT_D2]:
+        if os.path.exists(d):
+            log(f"Aplicando modificadores de gameplay em {d}...")
+            patch_tables(d, ini_file)
+
     log("=== Montagem da arvore SD concluida com sucesso! ===")
 
 if __name__ == "__main__":

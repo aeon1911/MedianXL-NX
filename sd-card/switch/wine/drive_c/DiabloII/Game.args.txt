@@ -1,1 +1,1 @@
--3dfx -log
+-3dfx -direct -log
