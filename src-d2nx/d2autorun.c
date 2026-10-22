@@ -490,6 +490,7 @@ static void set_ini_value(const char *path, const char *section, const char *key
         p += len;
     }
     if (in && !done) o += sprintf(out + o, "%s=%s\r\n", key, value);
+    else if (!done) o += sprintf(out + o, "\r\n[%s]\r\n%s=%s\r\n", section, key, value);
     if (o != (size_t)sz || memcmp(out, buf, o)) {
         f = fopen(path, "wb");
         if (f) { fwrite(out, 1, o, f); fclose(f); }
@@ -576,40 +577,21 @@ static void video_setup(void)
     cfg_str("Video", "Renderizador", "auto", mode, sizeof(mode));
     snprintf(setup, sizeof(setup), "%sD2SE_SETUP.ini", g_entry);
     snprintf(glide, sizeof(glide), "%sd2nx\\d2gl\\glide3x.dll", g_root);
+    if (!file_exists(glide)) snprintf(glide, sizeof(glide), "%sglide3x.dll", g_root);
     if (!lstrcmpiA(mode, "nativo")) { lg("Video: configuracao original da entrada mantida"); return; }
     {   /* Median XL */
-        char p113[MAX_PATH];
+        char sigma[MAX_PATH], p113[MAX_PATH];
+        snprintf(sigma, sizeof(sigma), "%sD2Sigma.dll", g_root);
         snprintf(p113, sizeof(p113), "%sP113c.dll", g_entry);
-        if (file_exists(p113)) {
+        if (file_exists(sigma) || file_exists(p113) || g_is_mxl) {
             char root_glide[MAX_PATH];
             snprintf(root_glide, sizeof(root_glide), "%sglide3x.dll", g_root);
-            if (!lstrcmpiA(mode, "sven")) {
-                char sven[MAX_PATH], mod_glide[MAX_PATH];
-                snprintf(sven, sizeof(sven), "%sd2nx\\sven\\glide3x.dll", g_root);
-                snprintf(mod_glide, sizeof(mod_glide), "%sglide3x.dll", g_entry);
-                if (file_exists(sven)) {
-                    lstrcpynA(g_glide_path, sven, sizeof(g_glide_path));
-                    CopyFileA(sven, mod_glide, FALSE);
-                    CopyFileA(sven, root_glide, FALSE);
-                }
-                render = 3;
-                set_ini_value(setup, "USERSETTINGS", "Renderer", "3");
-                set_ini_value(setup, "USERSETTINGS", "WindowMode", "0");
-                lg("Video: Median XL usando Sven Glide wrapper");
-            } else {
-                char d2gl_glide[MAX_PATH], mod_glide[MAX_PATH];
-                snprintf(d2gl_glide, sizeof(d2gl_glide), "%sd2nx\\d2gl\\glide3x.dll", g_root);
-                snprintf(mod_glide, sizeof(mod_glide), "%sglide3x.dll", g_entry);
-                if (file_exists(d2gl_glide)) {
-                    if (file_exists(mod_glide) && !same_file(mod_glide, d2gl_glide)) CopyFileA(d2gl_glide, mod_glide, FALSE);
-                    if (file_exists(root_glide) && !same_file(root_glide, d2gl_glide)) CopyFileA(d2gl_glide, root_glide, FALSE);
-                }
-                render = 3;
-                set_ini_value(setup, "USERSETTINGS", "Renderer", "3");
-                set_ini_value(setup, "USERSETTINGS", "WindowMode", "0");
-                d2gl_profile();
-                lg("Video: Median XL usando D2GL com perfil Switch");
-            }
+            lstrcpynA(g_glide_path, root_glide, sizeof(g_glide_path));
+            render = 3;
+            set_ini_value(setup, "USERSETTINGS", "Renderer", "3");
+            set_ini_value(setup, "USERSETTINGS", "WindowMode", "0");
+            d2gl_profile();
+            lg("Video: Median XL configurado com D2GL (perfil Switch, 60 FPS, skip_intro)");
             if (!RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Blizzard Entertainment\\Diablo II\\VideoConfig", 0, NULL, 0,
                                  KEY_SET_VALUE, NULL, &k, NULL)) {
                 RegSetValueExA(k, "Render", 0, REG_DWORD, (BYTE *)&render, sizeof(render));
@@ -898,7 +880,21 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             install_hooks();
         }
 
-        if (g_is_d2se) video_setup();
+        /* O tratador vetorado (VEH) DEVE ser instalado em TODOS os casos.
+         * No Switch/Horizon OS e Wine ARM64, protecao W^X e ativada por hardware.
+         * Quando qualquer mod grava ganchos na memoria de codigo das DLLs, o Tegra X1 gera
+         * Access Violation (c0000005). O VEH intercepta a falha e libera a secao com PAGE_EXECUTE_READWRITE. */
+        AddVectoredExceptionHandler(1, veh);
+        lg("Tratador de excecoes vetorado (VEH c0000005) ativo para todos os modulos");
+
+        void *cookie = NULL;
+        LdrRegisterDllNotification_t reg = (LdrRegisterDllNotification_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "LdrRegisterDllNotification");
+        if (reg) {
+            reg(0, on_dll, NULL, &cookie);
+            lg("LdrRegisterDllNotification ativo (notificacoes de modulo e pin de memoria)");
+        }
+
+        if (g_is_d2se || g_is_mxl) video_setup();
         th = CreateThread(NULL, 2 * 1024 * 1024, worker, NULL, 0, NULL);
         if (th) CloseHandle(th);
     }
