@@ -139,6 +139,12 @@ def deploy_game_files(target_d2):
     # 3. Copiar D2NXPad
     shutil.copy2(os.path.join(SRC_GAME, "d2nx/D2NXPad.dll"), os.path.join(target_d2, "d2nx/D2NXPad.dll"))
     shutil.copy2(os.path.join(SRC_GAME, "d2nx/d2nxpad.ini"), os.path.join(target_d2, "d2nx/d2nxpad.ini"))
+    src_tmpl = os.path.join(SRC_GAME, "d2nx/templates")
+    dst_tmpl = os.path.join(target_d2, "d2nx/templates")
+    if os.path.exists(src_tmpl):
+        os.makedirs(dst_tmpl, exist_ok=True)
+        for tf in os.listdir(src_tmpl):
+            shutil.copy2(os.path.join(src_tmpl, tf), os.path.join(dst_tmpl, tf))
 
     # 4. Criar configuracoes de boot do AUTORUN
     # D2GL exige modo de tela cheia (-3dfx -log). O parametro -w forca janela GDI legado,

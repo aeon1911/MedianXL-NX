@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <wchar.h>
 
 #define PAD_VERSION "1.1.1"
 
@@ -319,6 +321,8 @@ static DWORD ini_hex(const char *sec, const char *key, DWORD def)
     return b[0] ? strtoul(b, NULL, 16) : def;
 }
 
+static void init_gameplay_menu_indices(void);
+
 static void load_config(void)
 {
     int c, b;
@@ -380,6 +384,8 @@ static void load_config(void)
     g_ver_override.mouse_y = ini_hex("Offsets", "MouseY", 0);
     g_ver_override.player = ini_hex("Offsets", "Jogador", 0);
     g_ver_override.ui_vars = ini_hex("Offsets", "Paineis", 0);
+    g_ver_override.print_msg = ini_hex("Offsets", "PrintMsg", 0);
+    init_gameplay_menu_indices();
 }
 
 /* ======================================================================================
@@ -1391,6 +1397,363 @@ static int any_panel_open(void)
     return 0;
 }
 
+/* ======================================================================================
+ * Menu de Gameplay (Switch) - In-Game OSD e Subclass da Janela
+ * ==================================================================================== */
+#define WM_D2NX_PRINT_MSG (WM_APP + 777)
+
+static WNDPROC g_old_wndproc = NULL;
+typedef void (__stdcall *PrintGameString_t)(const wchar_t *msg, int color);
+static PrintGameString_t pPrintGameString = NULL;
+
+static LRESULT CALLBACK d2nx_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_D2NX_PRINT_MSG) {
+        const wchar_t *wmsg = (const wchar_t *)lp;
+        int color = (int)wp;
+        if (pPrintGameString && wmsg) {
+            pPrintGameString(wmsg, color);
+        }
+        return 0;
+    }
+    return CallWindowProcA(g_old_wndproc, hwnd, msg, wp, lp);
+}
+
+static void d2_print_string(const wchar_t *wmsg, int color)
+{
+    if (!pPrintGameString || !wmsg) return;
+    if (g_hwnd && IsWindow(g_hwnd) && g_old_wndproc) {
+        SendMessageW(g_hwnd, WM_D2NX_PRINT_MSG, (WPARAM)color, (LPARAM)wmsg);
+    } else {
+        pPrintGameString(wmsg, color);
+    }
+}
+
+static const float g_xp_opts[] = { 1.0f, 1.5f, 2.0f, 3.0f, 5.0f, 10.0f };
+#define XP_COUNT (sizeof(g_xp_opts)/sizeof(g_xp_opts[0]))
+
+static const float g_rune_opts[] = { 1.0f, 1.5f, 2.0f, 3.0f, 5.0f };
+#define RUNE_COUNT (sizeof(g_rune_opts)/sizeof(g_rune_opts[0]))
+
+static const float g_unique_opts[] = { 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };
+#define UNIQUE_COUNT (sizeof(g_unique_opts)/sizeof(g_unique_opts[0]))
+
+static const float g_rare_opts[] = { 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };
+#define RARE_COUNT (sizeof(g_rare_opts)/sizeof(g_rare_opts[0]))
+
+static const int g_gold_opts[] = { 0, 1000, 5000, 10000, 50000, 100000 };
+#define GOLD_COUNT (sizeof(g_gold_opts)/sizeof(g_gold_opts[0]))
+
+#define MENU_ITEM_COUNT 6 /* 0: XP, 1: Runas, 2: Unicos, 3: Raros, 4: Ouro, 5: Salvar */
+
+typedef struct {
+    int open;
+    int cur_item;
+    int xp_idx;
+    int rune_idx;
+    int unique_idx;
+    int rare_idx;
+    int gold_idx;
+    DWORD last_refresh;
+} GameplayMenu;
+
+static GameplayMenu g_gp_menu;
+static int g_welcome_shown = 0;
+
+static void init_gameplay_menu_indices(void)
+{
+    unsigned i;
+    g_gp_menu.xp_idx = 2; /* 2.0x padrao */
+    for (i = 0; i < XP_COUNT; i++) {
+        if (fabsf(g_xp_opts[i] - cfg.xp_multiplier) < 0.05f) { g_gp_menu.xp_idx = i; break; }
+    }
+    g_gp_menu.rune_idx = 2; /* 2.0x padrao */
+    for (i = 0; i < RUNE_COUNT; i++) {
+        if (fabsf(g_rune_opts[i] - cfg.rune_multiplier) < 0.05f) { g_gp_menu.rune_idx = i; break; }
+    }
+    g_gp_menu.unique_idx = 2; /* 1.5x padrao */
+    for (i = 0; i < UNIQUE_COUNT; i++) {
+        if (fabsf(g_unique_opts[i] - cfg.unique_multiplier) < 0.05f) { g_gp_menu.unique_idx = i; break; }
+    }
+    g_gp_menu.rare_idx = 2; /* 1.5x padrao */
+    for (i = 0; i < RARE_COUNT; i++) {
+        if (fabsf(g_rare_opts[i] - cfg.rare_multiplier) < 0.05f) { g_gp_menu.rare_idx = i; break; }
+    }
+    g_gp_menu.gold_idx = 3; /* 10000 padrao */
+    for (i = 0; i < GOLD_COUNT; i++) {
+        if (g_gold_opts[i] == cfg.start_gold) { g_gp_menu.gold_idx = i; break; }
+    }
+}
+
+static void patch_experience_file(const char *in_path, const char *out_path, float mult)
+{
+    FILE *fin = fopen(in_path, "rb");
+    if (!fin) {
+        fin = fopen(out_path, "rb");
+        if (!fin) return;
+    }
+    fseek(fin, 0, SEEK_END);
+    long sz = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+    BYTE *buf = (BYTE *)malloc(sz);
+    if (!buf) { fclose(fin); return; }
+    fread(buf, 1, sz, fin);
+    fclose(fin);
+
+    if (sz > 0x20 && mult >= 0.5f) {
+        int cnt = (int)(sz - 0x20) / 32;
+        int lvl, c;
+        for (lvl = 0; lvl < cnt; lvl++) {
+            DWORD offset = 0x20 + lvl * 32;
+            for (c = 0; c < 7; c++) {
+                DWORD pos = offset + 4 + c * 4;
+                if (pos + 4 <= (DWORD)sz) {
+                    DWORD orig = *(DWORD *)(buf + pos);
+                    DWORD nv = orig > 0 ? (DWORD)((float)orig / mult) : 0;
+                    if (orig > 0 && nv < 1) nv = 1;
+                    *(DWORD *)(buf + pos) = nv;
+                }
+            }
+        }
+    }
+    FILE *fout = fopen(out_path, "wb");
+    if (fout) { fwrite(buf, 1, sz, fout); fclose(fout); }
+    free(buf);
+}
+
+static void patch_itemratio_file(const char *in_path, const char *out_path, float u_mult, float r_mult)
+{
+    FILE *fin = fopen(in_path, "rb");
+    if (!fin) {
+        fin = fopen(out_path, "rb");
+        if (!fin) return;
+    }
+    fseek(fin, 0, SEEK_END);
+    long sz = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+    BYTE *buf = (BYTE *)malloc(sz);
+    if (!buf) { fclose(fin); return; }
+    fread(buf, 1, sz, fin);
+    fclose(fin);
+
+    if (sz >= 4) {
+        DWORD rows = *(DWORD *)buf;
+        DWORD r;
+        for (r = 0; r < rows; r++) {
+            DWORD off = 4 + r * 68;
+            if (off + 36 <= (DWORD)sz) {
+                DWORD u = *(DWORD *)(buf + off + 8);
+                DWORD rv = *(DWORD *)(buf + off + 20);
+                DWORD s = *(DWORD *)(buf + off + 32);
+                DWORD nu = (DWORD)((float)u / u_mult); if (nu < 5) nu = 5;
+                DWORD nr = (DWORD)((float)rv / r_mult); if (nr < 5) nr = 5;
+                DWORD ns = (DWORD)((float)s / u_mult); if (ns < 6) ns = 6;
+                *(DWORD *)(buf + off + 8) = nu;
+                *(DWORD *)(buf + off + 20) = nr;
+                *(DWORD *)(buf + off + 32) = ns;
+            }
+        }
+    }
+    FILE *fout = fopen(out_path, "wb");
+    if (fout) { fwrite(buf, 1, sz, fout); fclose(fout); }
+    free(buf);
+}
+
+static void patch_treasureclass_file(const char *in_path, const char *out_path, float r_mult)
+{
+    FILE *fin = fopen(in_path, "rb");
+    if (!fin) {
+        fin = fopen(out_path, "rb");
+        if (!fin) return;
+    }
+    fseek(fin, 0, SEEK_END);
+    long sz = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+    BYTE *buf = (BYTE *)malloc(sz);
+    if (!buf) { fclose(fin); return; }
+    fread(buf, 1, sz, fin);
+    fclose(fin);
+
+    if (sz >= 4) {
+        DWORD rows = *(DWORD *)buf;
+        DWORD row_size = 736;
+        DWORD r, idx;
+        for (r = 0; r < rows; r++) {
+            DWORD off = 4 + r * row_size;
+            if (off + row_size > (DWORD)sz) break;
+            char tc_name[64];
+            memcpy(tc_name, buf + off, 56);
+            tc_name[56] = 0;
+            if (!strncmp(tc_name, "Runes ", 6)) continue;
+            for (idx = 0; idx < 10; idx++) {
+                DWORD item_off = off + 0x38 + idx * 64;
+                char item_name[64];
+                memcpy(item_name, buf + item_off, 64);
+                item_name[63] = 0;
+                char lower[64];
+                int k;
+                for (k = 0; item_name[k] && k < 63; k++) lower[k] = (char)tolower((unsigned char)item_name[k]);
+                lower[k] = 0;
+                if (strstr(lower, "rune")) {
+                    DWORD prob_pos = off + 0x2b8 + idx * 4;
+                    DWORD prob = *(DWORD *)(buf + prob_pos);
+                    DWORD np = (DWORD)((float)prob * r_mult);
+                    if (np > 65535) np = 65535;
+                    *(DWORD *)(buf + prob_pos) = np;
+                }
+            }
+        }
+    }
+    FILE *fout = fopen(out_path, "wb");
+    if (fout) { fwrite(buf, 1, sz, fout); fclose(fout); }
+    free(buf);
+}
+
+static void patch_charstats_file(const char *in_path, const char *out_path, int gold)
+{
+    FILE *fin = fopen(in_path, "rb");
+    if (!fin) {
+        fin = fopen(out_path, "rb");
+        if (!fin) return;
+    }
+    fseek(fin, 0, SEEK_END);
+    long sz = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+    BYTE *buf = (BYTE *)malloc(sz);
+    if (!buf) { fclose(fin); return; }
+    fread(buf, 1, sz, fin);
+    fclose(fin);
+
+    if (sz >= 4) {
+        DWORD classes = *(DWORD *)buf;
+        DWORD row_len = 196;
+        DWORD c, pos;
+        for (c = 0; c < classes; c++) {
+            DWORD off = 4 + c * row_len;
+            if (off + row_len > (DWORD)sz) break;
+            for (pos = off; pos + 4 <= off + row_len; pos++) {
+                if (memcmp(buf + pos, "box ", 4) == 0) {
+                    DWORD item_start = pos - 8;
+                    DWORD slot9_pos = item_start + 8 * 8;
+                    if (slot9_pos + 8 <= (DWORD)sz) {
+                        memcpy(buf + slot9_pos, "gld ", 4);
+                        WORD gld_val = gold > 10000 ? 10000 : (WORD)gold;
+                        *(WORD *)(buf + slot9_pos + 4) = 0;
+                        *(WORD *)(buf + slot9_pos + 6) = gld_val;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    FILE *fout = fopen(out_path, "wb");
+    if (fout) { fwrite(buf, 1, sz, fout); fclose(fout); }
+    free(buf);
+}
+
+static void apply_and_save_gameplay_menu(void)
+{
+    char tmp[64];
+    cfg.xp_multiplier = g_xp_opts[g_gp_menu.xp_idx];
+    cfg.rune_multiplier = g_rune_opts[g_gp_menu.rune_idx];
+    cfg.unique_multiplier = g_unique_opts[g_gp_menu.unique_idx];
+    cfg.rare_multiplier = g_rare_opts[g_gp_menu.rare_idx];
+    cfg.start_gold = g_gold_opts[g_gp_menu.gold_idx];
+
+    snprintf(tmp, sizeof(tmp), "%.1f", cfg.xp_multiplier);
+    WritePrivateProfileStringA("Gameplay", "MultiplicadorXP", tmp, g_ini);
+    snprintf(tmp, sizeof(tmp), "%.1f", cfg.rune_multiplier);
+    WritePrivateProfileStringA("Gameplay", "MultiplicadorRunas", tmp, g_ini);
+    snprintf(tmp, sizeof(tmp), "%.2f", cfg.unique_multiplier);
+    WritePrivateProfileStringA("Gameplay", "MultiplicadorUnicos", tmp, g_ini);
+    snprintf(tmp, sizeof(tmp), "%.2f", cfg.rare_multiplier);
+    WritePrivateProfileStringA("Gameplay", "MultiplicadorRaros", tmp, g_ini);
+    snprintf(tmp, sizeof(tmp), "%d", cfg.start_gold);
+    WritePrivateProfileStringA("Gameplay", "OuroInicial", tmp, g_ini);
+
+    char d2_root[MAX_PATH];
+    lstrcpynA(d2_root, g_dir, sizeof(d2_root));
+    char *p = strrchr(d2_root, '\\');
+    if (p && p > d2_root) {
+        *p = 0;
+        p = strrchr(d2_root, '\\');
+        if (p) *(p + 1) = 0;
+    }
+
+    char excel_dir[MAX_PATH];
+    snprintf(excel_dir, sizeof(excel_dir), "%sdata\\global\\excel\\", d2_root);
+    CreateDirectoryA(excel_dir, NULL);
+
+    char t_exp[MAX_PATH], o_exp[MAX_PATH];
+    snprintf(t_exp, sizeof(t_exp), "%stemplates\\experience_sp.bin", g_dir);
+    snprintf(o_exp, sizeof(o_exp), "%sexperience_sp.bin", excel_dir);
+    patch_experience_file(t_exp, o_exp, cfg.xp_multiplier);
+
+    char t_ratio[MAX_PATH], o_ratio[MAX_PATH];
+    snprintf(t_ratio, sizeof(t_ratio), "%stemplates\\itemratio_sp.bin", g_dir);
+    snprintf(o_ratio, sizeof(o_ratio), "%sitemratio_sp.bin", excel_dir);
+    patch_itemratio_file(t_ratio, o_ratio, cfg.unique_multiplier, cfg.rare_multiplier);
+
+    char t_tc[MAX_PATH], o_tc[MAX_PATH];
+    snprintf(t_tc, sizeof(t_tc), "%stemplates\\treasureclassex.bin", g_dir);
+    snprintf(o_tc, sizeof(o_tc), "%streasureclassex.bin", excel_dir);
+    patch_treasureclass_file(t_tc, o_tc, cfg.rune_multiplier);
+
+    char t_cs[MAX_PATH], o_cs[MAX_PATH];
+    snprintf(t_cs, sizeof(t_cs), "%stemplates\\charstats.bin", g_dir);
+    snprintf(o_cs, sizeof(o_cs), "%scharstats.bin", excel_dir);
+    patch_charstats_file(t_cs, o_cs, cfg.start_gold);
+
+    lg("[GameplayMenu] Salvo e aplicado com sucesso! XP=%.1fx, Runas=%.1fx, Unicos=%.2fx, Raros=%.2fx, Ouro=%d",
+       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
+}
+
+static void d2_render_gameplay_menu(void)
+{
+    wchar_t line[160];
+    
+    d2_print_string(L"\xFFc4=== MENU DE GAMEPLAY (SWITCH) ===", 4);
+
+    _snwprintf(line, sizeof(line)/sizeof(line[0]),
+               g_gp_menu.cur_item == 0 ? L"\xFFc2> Multiplicador XP:  [\xFFc8 %.1fx \xFFc2]  \xFFc5(1.0x-10x)"
+                                       : L"\xFFc0  Multiplicador XP:  [\xFFc4 %.1fx \xFFc0]",
+               g_xp_opts[g_gp_menu.xp_idx]);
+    d2_print_string(line, 0);
+
+    _snwprintf(line, sizeof(line)/sizeof(line[0]),
+               g_gp_menu.cur_item == 1 ? L"\xFFc2> Queda de Runas:    [\xFFc8 %.1fx \xFFc2]  \xFFc5(1.0x-5.0x)"
+                                       : L"\xFFc0  Queda de Runas:    [\xFFc4 %.1fx \xFFc0]",
+               g_rune_opts[g_gp_menu.rune_idx]);
+    d2_print_string(line, 0);
+
+    _snwprintf(line, sizeof(line)/sizeof(line[0]),
+               g_gp_menu.cur_item == 2 ? L"\xFFc2> Itens Unicos:      [\xFFc8 %.2fx \xFFc2]  \xFFc5(1.0x-3.0x)"
+                                       : L"\xFFc0  Itens Unicos:      [\xFFc4 %.2fx \xFFc0]",
+               g_unique_opts[g_gp_menu.unique_idx]);
+    d2_print_string(line, 0);
+
+    _snwprintf(line, sizeof(line)/sizeof(line[0]),
+               g_gp_menu.cur_item == 3 ? L"\xFFc2> Itens Raros:       [\xFFc8 %.2fx \xFFc2]  \xFFc5(1.0x-3.0x)"
+                                       : L"\xFFc0  Itens Raros:       [\xFFc4 %.2fx \xFFc0]",
+               g_rare_opts[g_gp_menu.rare_idx]);
+    d2_print_string(line, 0);
+
+    _snwprintf(line, sizeof(line)/sizeof(line[0]),
+               g_gp_menu.cur_item == 4 ? L"\xFFc2> Ouro Inicial Lv1:  [\xFFc8 %d \xFFc2]  \xFFc5(0-100k)"
+                                       : L"\xFFc0  Ouro Inicial Lv1:  [\xFFc4 %d \xFFc0]",
+               g_gold_opts[g_gp_menu.gold_idx]);
+    d2_print_string(line, 0);
+
+    if (g_gp_menu.cur_item == 5)
+        d2_print_string(L"\xFFc2>>> [ SALVAR E APLICAR ] <<<", 2);
+    else
+        d2_print_string(L"\xFFc3    [ SALVAR E APLICAR ]", 3);
+
+    d2_print_string(L"\xFFc5(D-Pad: Navega/Altera | A: Salva | B / ZL+Minus: Sair)", 5);
+
+    g_gp_menu.last_refresh = GetTickCount();
+}
+
 static BOOL CALLBACK enum_win_proc(HWND w, LPARAM lp)
 {
     DWORD pid = 0;
@@ -1425,7 +1788,15 @@ static void tick(float dt)
 {
     int b, ctx, mode;
     HWND fg;
-    if (!g_hwnd || !IsWindow(g_hwnd)) { g_hwnd = find_game_window(); g_cal_ok = 0; if (!g_hwnd) return; }
+    if (!g_hwnd || !IsWindow(g_hwnd)) {
+        g_hwnd = find_game_window();
+        g_cal_ok = 0;
+        if (!g_hwnd) return;
+        if (!g_old_wndproc) {
+            g_old_wndproc = (WNDPROC)(LONG_PTR)SetWindowLongPtrA(g_hwnd, GWLP_WNDPROC, (LONG_PTR)d2nx_wndproc);
+            lg("WndProc subclass instalado: g_hwnd=%p, old=%p", g_hwnd, g_old_wndproc);
+        }
+    }
     poll_pad();
     fg = GetForegroundWindow();
     if (fg && !cfg.autojoin && !cfg.autowalk) {
@@ -1578,6 +1949,81 @@ static void tick(float dt)
         }
     }
 
+    if (mode == M_GAME && !g_welcome_shown) {
+        static DWORD s_welcome_t0;
+        if (!s_welcome_t0) s_welcome_t0 = GetTickCount();
+        if (GetTickCount() - s_welcome_t0 > 500) {
+            wchar_t wbuf[160];
+            d2_print_string(L"\xFFc4[D2NX] Controles Switch ativos! Segure ZL e aperte Minus para abrir o Menu.", 4);
+            _snwprintf(wbuf, sizeof(wbuf)/sizeof(wbuf[0]),
+                       L"\xFFc2[Gameplay] XP: %.1fx | Runas: %.1fx | Unicos: %.2fx | Raros: %.2fx | Ouro: %d",
+                       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
+            d2_print_string(wbuf, 2);
+            g_welcome_shown = 1;
+            lg("[D2NX] Mensagem de boas-vindas exibida na tela!");
+        }
+    }
+
+    /* Atalho do Menu de Gameplay: ZL + Minus, Minus + Plus, ZL + Plus, ou F10 */
+    int menu_toggle = 0;
+    if ((g_pad.down[B_ZL] && PRESSED(B_MINUS)) ||
+        (PRESSED(B_MINUS) && g_pad.down[B_PLUS]) ||
+        (PRESSED(B_PLUS) && g_pad.down[B_MINUS]) ||
+        (g_pad.down[B_ZL] && PRESSED(B_PLUS))) {
+        menu_toggle = 1;
+    }
+    if (GetAsyncKeyState(VK_F10) & 1) menu_toggle = 1;
+
+    if (menu_toggle) {
+        g_gp_menu.open = !g_gp_menu.open;
+        if (g_gp_menu.open) {
+            lg("[GameplayMenu] Menu aberto via controle!");
+            release_all();
+            d2_render_gameplay_menu();
+        } else {
+            lg("[GameplayMenu] Menu fechado.");
+            d2_print_string(L"\xFFc5[D2NX] Menu de gameplay fechado.", 5);
+        }
+    }
+
+    if (g_gp_menu.open) {
+        if (PRESSED(B_UP)) {
+            g_gp_menu.cur_item = (g_gp_menu.cur_item - 1 + MENU_ITEM_COUNT) % MENU_ITEM_COUNT;
+            d2_render_gameplay_menu();
+        } else if (PRESSED(B_DOWN)) {
+            g_gp_menu.cur_item = (g_gp_menu.cur_item + 1) % MENU_ITEM_COUNT;
+            d2_render_gameplay_menu();
+        } else if (PRESSED(B_LEFT)) {
+            if (g_gp_menu.cur_item == 0 && g_gp_menu.xp_idx > 0) g_gp_menu.xp_idx--;
+            else if (g_gp_menu.cur_item == 1 && g_gp_menu.rune_idx > 0) g_gp_menu.rune_idx--;
+            else if (g_gp_menu.cur_item == 2 && g_gp_menu.unique_idx > 0) g_gp_menu.unique_idx--;
+            else if (g_gp_menu.cur_item == 3 && g_gp_menu.rare_idx > 0) g_gp_menu.rare_idx--;
+            else if (g_gp_menu.cur_item == 4 && g_gp_menu.gold_idx > 0) g_gp_menu.gold_idx--;
+            d2_render_gameplay_menu();
+        } else if (PRESSED(B_RIGHT)) {
+            if (g_gp_menu.cur_item == 0 && g_gp_menu.xp_idx < (int)XP_COUNT - 1) g_gp_menu.xp_idx++;
+            else if (g_gp_menu.cur_item == 1 && g_gp_menu.rune_idx < (int)RUNE_COUNT - 1) g_gp_menu.rune_idx++;
+            else if (g_gp_menu.cur_item == 2 && g_gp_menu.unique_idx < (int)UNIQUE_COUNT - 1) g_gp_menu.unique_idx++;
+            else if (g_gp_menu.cur_item == 3 && g_gp_menu.rare_idx < (int)RARE_COUNT - 1) g_gp_menu.rare_idx++;
+            else if (g_gp_menu.cur_item == 4 && g_gp_menu.gold_idx < (int)GOLD_COUNT - 1) g_gp_menu.gold_idx++;
+            d2_render_gameplay_menu();
+        } else if (PRESSED(B_A)) {
+            apply_and_save_gameplay_menu();
+            d2_print_string(L"\xFFc2[D2NX] CONFIGURACOES SALVAS E APLICADAS!", 2);
+            wchar_t wbuf[160];
+            _snwprintf(wbuf, sizeof(wbuf)/sizeof(wbuf[0]),
+                       L"\xFFc4XP: %.1fx | Runas: %.1fx | Unicos: %.2fx | Raros: %.2fx | Ouro: %d",
+                       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
+            d2_print_string(wbuf, 4);
+        } else if (PRESSED(B_B)) {
+            g_gp_menu.open = 0;
+            d2_print_string(L"\xFFc5[D2NX] Menu de gameplay fechado.", 5);
+        } else if (GetTickCount() - g_gp_menu.last_refresh > 4000) {
+            d2_render_gameplay_menu();
+        }
+        return;
+    }
+
     /* direcao em que o heroi olha */
     if (sqrtf(g_pad.rx * g_pad.rx + g_pad.ry * g_pad.ry) > 0.5f) { g_face_x = g_pad.rx; g_face_y = g_pad.ry; }
     else if (sqrtf(g_pad.lx * g_pad.lx + g_pad.ly * g_pad.ly) > cfg.dz_left) { g_face_x = g_pad.lx; g_face_y = g_pad.ly; }
@@ -1664,12 +2110,20 @@ static DWORD WINAPI worker(void *arg)
         if (g_ver_override.mouse_y) merged.mouse_y = g_ver_override.mouse_y;
         if (g_ver_override.player) merged.player = g_ver_override.player;
         if (g_ver_override.ui_vars) merged.ui_vars = g_ver_override.ui_vars;
+        if (g_ver_override.print_msg) merged.print_msg = g_ver_override.print_msg;
         g_ver = &merged;
         lg("Diablo II %s detectado (D2Client %08lX)", g_ver->name, g_client);
     } else {
         IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)(g_client + ((IMAGE_DOS_HEADER *)g_client)->e_lfanew);
         lg("D2Client desconhecido (timestamp %08lX, tamanho %lX): modo cursor", nt->FileHeader.TimeDateStamp,
            nt->OptionalHeader.SizeOfImage);
+    }
+    if (g_ver && g_ver->print_msg) {
+        pPrintGameString = (PrintGameString_t)(g_client + g_ver->print_msg);
+        lg("PrintGameString resolvido em %p (RVA %08lX)", pPrintGameString, g_ver->print_msg);
+    } else if (g_client) {
+        pPrintGameString = (PrintGameString_t)(g_client + 0x7D850);
+        lg("PrintGameString fallback para 0x7D850: %p", pPrintGameString);
     }
     unit_layout_init();
     load_xinput();

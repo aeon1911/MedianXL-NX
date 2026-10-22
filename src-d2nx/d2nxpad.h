@@ -17,6 +17,7 @@ typedef struct D2Ver {
     DWORD f_player;        /* funcao stdcall Unit* (<=1.10) */
     DWORD ui_vars;         /* array DWORD com estado dos paineis (0 = desconhecido) */
     int room_fmt;          /* 0: layout 1.09/1.10, 1: layout 1.11+ */
+    DWORD print_msg;       /* RVA PrintGameString (stdcall wchar_t*, int color) */
 } D2Ver;
 
 const D2Ver *d2ver_detect(HMODULE client);
