@@ -1,0 +1,36 @@
+# Build
+/build/
+/dist/
+*.o
+*.a
+*.nro
+*.nacp
+*.elf
+*.map
+*.dll
+*.exe
+*.mpq
+*.MPQ
+
+# Local paths to proprietary install (never commit)
+/config/local.ini
+/config/local.toml
+/config/d2nx.local.ini
+wine_prefix/
+prefix/
+.wine/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+__pycache__/
+
+# Evidence may contain large PNGs; keep logs, ignore huge dumps if needed
+/docs/evidence/*.tmp
+/docs/evidence/raw/
+
+# StormLib build tree (source stays; rebuild locally)
+/third_party/StormLib/build/
+
