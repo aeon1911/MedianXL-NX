@@ -1,0 +1,21 @@
+Wine MSVCR90 standalone PE32 component
+
+Input: local Wine 11.17 (Staging), lib/wine/i386-windows/msvcr90.dll.
+Original SHA256: c2774922f8148b75c1f78958502895066b48dbad54e3048488ebcaad6cd056eb
+Delivered SHA256: 3440f67d2e236b2eda858e4a37af287d0b743ad973cfba5f031e4bb187a72b93
+
+License: GNU LGPL 2.1 or later; see COPYING.LIB.
+Wine source (includes MSVCR90 and its parent MSVCRT sources):
+https://github.com/wine-mirror/wine/tree/wine-11.17
+https://github.com/wine-mirror/wine/archive/refs/tags/wine-11.17.tar.gz
+Tag commit: 36b6a2cf679fb395f668a917b76537190e212d9c
+Staging source/patches:
+https://github.com/wine-staging/wine-staging/tree/v11.17
+https://github.com/wine-staging/wine-staging/archive/refs/tags/v11.17.tar.gz
+Tag commit: 83acf91a00c7db33ac85a704293159fb47aaed24
+
+Local packaging change, reproducible in tools/import-msvcr90.py:
+zero 16 bytes of the DOS stub at offset 0x40, previously "Wine builtin DLL".
+No CRT instructions, resources, exports, imports or PE sections changed.
+The standalone copy is loaded as a native PE32 DLL. This is a component
+addition; the official AUTORUN runtime NRO is not replaced or upgraded.

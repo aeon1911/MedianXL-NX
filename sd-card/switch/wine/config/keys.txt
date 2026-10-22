@@ -1,0 +1,37 @@
+# Keys the controller sends, one NAME=code line each, where code is a Windows
+# virtual-key code in decimal or 0x form. Remove the # to change one. A and B
+# are not here: they stay the left and right mouse buttons.
+#
+# UP=0x26      d-pad up, and the left stick pushed up unless LUP is set
+# DOWN=0x28
+# LEFT=0x25
+# RIGHT=0x27
+# X=0x20       space
+# Y=0x46       f
+# L=0x09       tab
+# R=0x10       shift
+# ZL=0x28      down arrow, a brake in a racing game
+# ZR=0x26      up arrow, the accelerator
+# PLUS=0x1B    escape
+# MINUS=0x09   tab
+# STICKL=0x11  control
+# STICKR=0x12  alt
+# LUP=0        the left stick alone, for a game that walks with one set of keys
+# LDOWN=0      and works its menus with another. Unset, it sends what the d-pad
+# LLEFT=0      does.
+# LRIGHT=0
+# RUP=0x26     the right stick, when it is set to send keys rather than move
+# RDOWN=0x28   the mouse
+# RLEFT=0x25
+# RRIGHT=0x27
+# TUP=0x26     a finger dragged across the screen, likewise
+# TDOWN=0x28
+# TLEFT=0x25
+# TRIGHT=0x27
+#
+# And what each of the four that can point does, which is mouse or keys:
+#
+# LSTICK=keys
+# RSTICK=mouse
+# DPAD=keys
+# TOUCH=mouse

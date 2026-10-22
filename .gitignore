@@ -1,36 +1,93 @@
-# Build
+# Build & temporary directories
 /build/
 /dist/
+
+# Object and temporary files
 *.o
 *.a
-*.nro
 *.nacp
 *.elf
 *.map
-*.dll
-*.exe
-*.mpq
-*.MPQ
+*.tmp
 
-# Local paths to proprietary install (never commit)
+# Strictly ignore Blizzard proprietary Diablo II LoD files
+Game.exe
+game.exe
+GAME.EXE
+Game.exe.orig
+game.exe.orig
+'Diablo II.exe'
+'diablo ii.exe'
+d2char.mpq
+d2data.mpq
+d2exp.mpq
+d2music.mpq
+d2sfx.mpq
+d2speech.mpq
+d2video.mpq
+d2xmusic.mpq
+D2XMUSIC.MPQ
+d2xtalk.mpq
+d2xvideo.mpq
+D2XVIDEO.MPQ
+patch_d2.mpq
+Patch_D2.mpq
+Storm.dll
+D2Client.dll
+D2Common.dll
+D2Game.dll
+D2Win.dll
+D2Lang.dll
+D2Net.dll
+D2sound.dll
+D2Launch.dll
+D2CMP.dll
+D2Gdi.dll
+D2gfx.dll
+Bnclient.dll
+BnClient.dll
+D2MCPClient.dll
+D2Multi.dll
+D2Direct3D.dll
+D2DDraw.dll
+D2Glide.dll
+binkw32.dll
+SmackW32.dll
+ijl11.dll
+Diablo II.exe
+diablo ii.exe
+DIABLO II.EXE
+D2VidTst.exe
+d2vidtst.exe
+*.exe.orig
+
+# Local paths / IDE
 /config/local.ini
 /config/local.toml
 /config/d2nx.local.ini
 wine_prefix/
 prefix/
 .wine/
-
-# IDE / OS
 .idea/
 .vscode/
 *.swp
 .DS_Store
 __pycache__/
 
-# Evidence may contain large PNGs; keep logs, ignore huge dumps if needed
+# Evidence tmp
 /docs/evidence/*.tmp
 /docs/evidence/raw/
 
-# StormLib build tree (source stays; rebuild locally)
+# StormLib build
 /third_party/StormLib/build/
 
+# Legacy Phase 0 recon files
+/CMakeLists.txt
+/compat/
+/config/
+/src/
+/switch/
+/third_party/
+/tools/build_host.sh
+src-d2nx/*.dll
+src-d2nx/tests/*.dll

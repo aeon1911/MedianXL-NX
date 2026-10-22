@@ -1,0 +1,17 @@
+AUTORUN test-build-4 wow64.dll compatibility patch, LGPL-2.1-or-later.
+Original source: https://github.com/autorunhq/autorun/tree/9b7170505f9084fee0ffe1a237b08557a6ab2868
+Function: dlls/wow64/virtual.c wow64_NtProtectVirtualMemory.
+The original ARM64 DLL is retained as wow64.dll.autorun-original.
+Original SHA256: 0e9c7d11812d44ba45334568832abe6929671ebfd9ecfd632c35f31d5ba6f4db
+Patched SHA256: 53aa804053e5f1cf1b01ffd13498b0d263b58f0cf484a7e934f6d84ee6a5fb9e
+This is an explicitly modified component; runtime NRO is unchanged.
+Reproduction: python3 tools/fix-wow64-protect.py original.dll output.dll.
+The tool is the exact complete source for the binary transformation.
+It appends a 24-byte position-independent ARM64 compatibility shim in an RX
+section and redirects one instruction. All original imports/exports remain.
+NULL old-protection output uses local scratch storage; valid pointers retain
+normal API behavior. Calls still reach the real NtProtectVirtualMemory and
+return its actual status. This intentionally accepts NULL for these mods.
+It does not bypass memory protection or ignore failed protection calls.
+ARM64 instructions and binary hash are verified in tests/wow64-protect.py.
+The shim has not been tested on Horizon yet.

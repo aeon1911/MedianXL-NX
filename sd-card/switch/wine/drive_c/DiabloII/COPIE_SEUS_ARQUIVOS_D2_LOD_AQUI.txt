@@ -1,0 +1,55 @@
+================================================================================
+INSTRUÇÕES: ADICIONAR ARQUIVOS DO DIABLO II: LORD OF DESTRUCTION (1.13c)
+================================================================================
+
+Este pacote contém o runtime AUTORUN (Wine-NX) para Nintendo Switch, os controles
+nativos D2PAD (in-process) e todos os arquivos do mod Median XL Σ 2.14.6.
+
+Por questões de direitos autorais da Blizzard Entertainment, os arquivos comerciais
+do Diablo II LoD original NÃO estão inclusos e devem ser copiados da sua instalação:
+
+ARQUIVOS NECESSÁRIOS:
+1. Arquivos MPQ de dados do Diablo II e Expansão:
+   - d2char.mpq
+   - d2data.mpq
+   - d2exp.mpq
+   - d2music.mpq
+   - d2sfx.mpq
+   - d2speech.mpq
+   - d2video.mpq
+   - d2xmusic.mpq (ou D2XMUSIC.MPQ)
+   - d2xtalk.mpq
+   - d2xvideo.mpq (ou D2XVIDEO.MPQ)
+   - patch_d2.mpq (ou Patch_D2.mpq)
+
+2. DLLs base da versão 1.13c:
+   - Storm.dll
+   - D2Client.dll
+   - D2Common.dll
+   - D2Game.dll
+   - D2Win.dll
+   - D2Lang.dll
+   - D2Net.dll
+   - D2sound.dll
+   - D2Launch.dll
+   - D2CMP.dll
+   - D2Gdi.dll
+   - D2gfx.dll
+   - Bnclient.dll (ou BnClient.dll)
+   - D2MCPClient.dll
+   - D2Multi.dll
+   - binkw32.dll
+   - SmackW32.dll
+   - ijl11.dll
+
+3. Executável do Jogo:
+   - Game.exe (versão 1.13c)
+   Execute: python3 tools/inject_pe_import.py Game.exe
+   ou use o script utilitário: python3 tools/install_lod_files.py /caminho/do/seu/D2LoD
+
+NÃO SUBSTITUA:
+- Fog.dll (este é o Fog.dll modificado do Median XL)
+- D2Sigma.dll (biblioteca principal do Median XL)
+- D2Autorun.dll (camada de compatibilidade do Switch)
+- d2nx/ (driver do controle do Switch)
+================================================================================

@@ -50,7 +50,10 @@ def clean_obsolete(target_d2):
         "d2gl.ini.autorun*",
         "d2gl.mpq.autorun*",
         "glide3x.dll.autorun*",
-        "run-next.txt.previous"
+        "run-next.txt.previous",
+        "Patch_D2.mpq",
+        "D2XMUSIC.MPQ",
+        "D2XVIDEO.MPQ"
     ]
     for pat in obsolete_patterns:
         for f in glob.glob(os.path.join(target_d2, pat)):
@@ -102,12 +105,18 @@ def deploy_game_files(target_d2):
         else:
             log(f"ALERTA: Arquivo critico ausente: {src}")
 
-    # 2. Copiar MPQs base e Median XL
-    for mpq in glob.glob(os.path.join(SRC_GAME, "*.mpq")) + glob.glob(os.path.join(SRC_GAME, "*.MPQ")):
+    # 2. Copiar MPQs base e Median XL (normalizado em minusculo para evitar colisoes FAT32)
+    seen_mpqs = set()
+    all_mpqs = sorted(glob.glob(os.path.join(SRC_GAME, "*.mpq")) + glob.glob(os.path.join(SRC_GAME, "*.MPQ")))
+    for mpq in all_mpqs:
         base = os.path.basename(mpq)
-        dst = os.path.join(target_d2, base)
+        canonical = base.lower() if not base.startswith("medianxl-") else base
+        if canonical in seen_mpqs:
+            continue
+        seen_mpqs.add(canonical)
+        dst = os.path.join(target_d2, canonical)
         if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(mpq):
-            log(f"  Copiando MPQ: {base} ({os.path.getsize(mpq) // 1024} KB)")
+            log(f"  Copiando MPQ: {canonical} ({os.path.getsize(mpq) // 1024} KB)")
             shutil.copy2(mpq, dst)
 
     # 3. Aplicar correcao de Characteristics no Fog.dll (evita STATUS_CONFLICTING_ADDRESSES c0000018)

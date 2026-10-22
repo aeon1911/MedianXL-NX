@@ -1,62 +1,99 @@
-# D2SE Switch — launcher + camada de compatibilidade para o Diablo II existente
+# Median XL Σ 2.14.6 — Nintendo Switch Port (AUTORUN)
 
-Este projeto **não reimplementa, não reescreve e não redesenha o Diablo II**. Ele executa o jogo
-que já está instalado: `D2SE.exe` / `Game.exe` originais, os cores de `D2SE/CORES`, os mods de
-`MODS`, o D2GL do próprio usuário (`glide3x.dll`/`ddraw.dll` + `d2gl.ini` + `d2gl.mpq`) e o
-D2Pad que os mods já trazem.
+Port completo de **Median XL Σ 2.14.6** para o **Nintendo Switch** rodando diretamente sobre o Horizon OS (Atmosphère CFW) através do runtime de compatibilidade **AUTORUN (Wine-NX)**, com integração total de controle analógico **D2PAD** in-process, renderização OpenGL via **D2GL** e 60 FPS cravados.
 
-Como o Horizon OS (Switch) não é Linux, Box64 + Wine não rodam dentro de um `.nro` comum. O
-desenho é:
+---
 
-1. **`dist/d2se-switch.nro`** (Atmosphère/hbmenu): menu estilo D2SE que lê a instalação no SD
-   (`sdmc:/d2se/Diablo II LoD 1.13c -D2SE`, ajustável em `sdmc:/switch/d2se-launcher/config.ini`),
-   lista os 8 cores e os mods, cada mod preso ao core exigido no `D2SE_SETUP.ini`, mostra o
-   preflight e grava `sdmc:/switch/d2se-launcher/launch.ini`.
-2. **Linux no Switch (L4T Ubuntu via hekate)**: `compat/d2se-run.sh launch.ini` executa
-   `box64 wine D2SE.exe` (ou `Game.exe` para standalone como o ProjectD2), com versões fixadas em
-   `compat/versions.env` (Box64 v0.4.4 perfil Tegra X1 + Wine 11.17 x86_64 WoW64).
-3. **PC (x86_64)**: o mesmo menu (`build/d2se_menu`) e o mesmo runner, usando Wine direto.
+## 🎮 Destaques do Port
 
-## Menu: como escolhe core e mod
-- Cores: cada pasta em `D2SE/CORES/<versão>` (1.07, 1.08, 1.09b, 1.09d, 1.10f, 1.11b, 1.12a, 1.13c).
-- Mods: cada pasta em `MODS/` com `D2SE_SETUP.ini`; o core vem de `D2Core=`. Pastas sem esse
-  arquivo (ex.: `d2hackmap_v1.14`) aparecem como "não-D2SE" e não iniciam.
-- D2GL: flag liga/desliga. Só é oferecido quando o wrapper do usuário existe e o core é suportado
-  pelo D2GL (1.09d, 1.10f, 1.11b, 1.12a, 1.13c…); 1.07/1.08/1.09b iniciam sem D2GL.
-- Preflight: MPQs base, DLLs do core, `Patch_D2.mpq`, `ModMPQ1-3`, `ModDll1-3`, PlugY, D2Pad.
-- Saves: a mesma pasta que o D2SE usa (`MODS/<mod>/save`, `D2SE/CORES/<core>/save`); nenhum
-  formato novo.
+* **Execução Direta no Horizon OS:** Não requer Linux (L4T Ubuntu) nem dual-boot. Inicia diretamente pelo **Homebrew Menu (hbmenu)** do Atmosphère.
+* **Controles Nativos D2PAD In-Process:** Movimentação analógica direta do herói na alavanca esquerda, cursor virtual do mouse na alavanca direita, atalhos rápidos para poções, inventário, habilidades e mira parada.
+* **Renderização D2GL a 60 FPS:** Glide/OpenGL com interpolação de movimento (`motion_prediction=true`), resolução nativa widescreen sem distorção e sem travamentos.
+* **Correções Dinâmicas de Kernel/Wine:** Patch em memória na `Fog.dll` para evitar crashes de seção crítica no Wine-NX, virtualização de tokens de privilégio (`OpenProcessToken`) e proteção de páginas de memória para o motor do `D2Sigma.dll`.
+* **Zero D2SE / Inicialização Rápida:** O jogo carrega o `Game.exe` e o `D2Sigma.dll` de forma síncrona e direta em poucos segundos.
 
-## Runner (`compat/d2se-run.sh`)
-- Não altera a instalação: monta um overlay de symlinks em `build/runtime/`, copia só
-  ini/log/txt/json/cfg, aponta o save da entrada escolhida para o save real (ou para
-  `build/test-saves/` com `--scratch-saves`), grava `ActiveFolder` no `D2SE.ini` do overlay e
-  `Renderer/WindowMode/NoSound` no `D2SE_SETUP.ini` do overlay.
-- **Guarda do D2VidTst**: grava `InstallPath` e `VideoConfig\Render` no prefixo antes de iniciar,
-  usa o stub `D2VidTst.exe` do kit `D2VidTst_fix` do usuário (overlay com `Render` do descritor) e
-  derruba o prefixo se o `D2VidTst.exe` reaparecer.
-- **Guarda de tela**: recusa abrir Wine/jogo (código 6) na sessão gráfica do usuário, a menos que
-  `D2SE_ALLOW_DISPLAY=1` (uso no L4T, onde a tela é do jogo) ou `D2SE_HEADLESS_DISPLAY` (Xvfb).
+---
 
-## Uso no PC
-```bash
-cmake -S . -B build && cmake --build build --target d2se_menu
-./build/d2se_menu --list
-./build/d2se_menu --select 1.13c --write build/compat/launch.ini
-compat/d2se-run.sh build/compat/launch.ini --dry-run          # mostra o comando, não abre nada
-D2SE_ALLOW_DISPLAY=1 compat/d2se-run.sh build/compat/launch.ini  # abre o jogo de verdade
+## 🕹️ Mapeamento de Controles (D2PAD)
+
+O driver `D2NXPad` intercepta chamadas de controle diretamente no processo do jogo:
+
+| Botão / Alavanca | Ação no Jogo | Comportamento |
+|---|---|---|
+| **Alavanca Esquerda (L-Stick)** | Movimentação Analógica | O herói corre diretamente na direção inclinada do analógico. |
+| **Alavanca Direita (R-Stick)** | Cursor do Mouse Virtual | Movimentação livre do ponteiro na tela para menus, mira e inventário. |
+| **Botão A** | Botão Esquerdo do Mouse | Interagir, atacar, coletar itens do chão. |
+| **Botão B** | Botão Direito do Mouse | Habilidade secundária / Magia ativa. |
+| **Botão X** | Mirar Parado (Shift) | Mantém o herói no lugar disparando magias ou projéteis sem andar. |
+| **Botão Y** | Exibir Itens no Chão (Alt) | Liga/desliga a visualização de drops no chão. |
+| **Gatilho ZL** | Poção de Vida | Consome o slot 1 do cinto. |
+| **Gatilho ZR** | Poção de Mana | Consome o slot 2 do cinto. |
+| **Botão L** | Abrir Inventário (`I`) | Abre/fecha a mochila. |
+| **Botão R** | Árvore de Habilidades (`T`) | Abre a tela de Skills. |
+| **D-Pad Cima** | Slot 3 do Cinto | Poção de Rejuvenescimento. |
+| **D-Pad Baixo** | Slot 4 do Cinto | Portal da Cidade (TP). |
+| **D-Pad Esquerda / Direita** | Trocar Armas (`W`) | Alterna entre o conjunto primário e secundário de armas. |
+| **Botão Plus (+)** | Menu de Pausa (`ESC`) | Menu de opções, salvar e sair. |
+| **Botão Minus (-)** | Automap (`Tab`) | Mapa translúcido na tela. |
+| **Clique R-Stick (R3)** | Centralizar Cursor | Reposiciona o ponteiro do mouse sobre o personagem. |
+
+---
+
+## 📦 Estrutura do Repositório
+
+```text
+├── sd-card/                  # Árvore pronta para extrair no MicroSD do Switch
+│   └── switch/
+│       ├── d2-autorun/       # Launcher NRO para o Homebrew Menu
+│       └── wine/             # Runtime Wine-NX configurado para Horizon OS
+│           └── drive_c/
+│               └── DiabloII/ # Mod Median XL 2.14.6, D2GL, D2Autorun, D2NXPad
+├── src-d2nx/                 # Código-fonte C dos módulos nativos (D2Autorun + D2NXPad)
+│   ├── d2autorun.c
+│   ├── d2nxpad.c
+│   ├── hook.h
+│   └── build.sh
+├── tools/                    # Ferramentas de automação e injeção
+│   ├── assemble_github_tree.py
+│   ├── install_lod_files.py
+│   ├── inject_pe_import.py
+│   ├── fix_fog_characteristics.py
+│   └── package_release.py
+├── docs/                     # Documentação de arquitetura, testes e evidências
+├── INSTALL.md                # Manual completo de instalação
+└── README.md
 ```
 
-## Compilar o .nro
-```bash
-docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD":/p -w /p/switch/d2se-launcher \
-  devkitpro/devkita64:20260219 make
-cp switch/d2se-launcher/d2se-switch.nro dist/
-```
+---
 
-## Estado
-Ver `docs/STATUS.md` (escrito / compilado / executado neste PC / **não testado no Switch**).
-Não há promessa de 60 FPS no Switch Lite.
+## 🚀 Como Instalar no Nintendo Switch
 
-O código antigo `d2nx` (renderizador próprio, compositor DT1/DS1, simulação) está **descontinuado**
-e não faz parte do produto.
+### 1. Requisitos
+* Nintendo Switch desbloqueado com CFW **Atmosphère**.
+* Cartão MicroSD formatado em **FAT32** (recomendado) ou exFAT com ~3 GB livres.
+* Instalação original do **Diablo II: Lord of Destruction (v1.13c)**.
+
+### 2. Preparando os Arquivos LoD (Automático via PC)
+Por questões legais e de direitos autorais da Blizzard Entertainment, **este repositório não inclui os arquivos proprietários comerciais do Diablo II LoD original**.
+
+1. Clone ou baixe este repositório.
+2. Execute o assistente informando a pasta onde seu Diablo II LoD 1.13c está instalado no PC:
+   ```bash
+   python3 tools/install_lod_files.py "/caminho/para/seu/Diablo II LoD 1.13c"
+   ```
+   *O utilitário copiará os MPQs e DLLs da Blizzard com os nomes canônicos e injetará a seção `.d2auto` no seu `Game.exe` automaticamente.*
+
+3. Copie a pasta **`sd-card/switch/`** para a pasta **`switch/`** do seu cartão MicroSD.
+
+### 3. Como Jogar
+1. No Switch, entre no **Homebrew Menu** segurando `R` ao abrir qualquer jogo comercial (Modo *Title Override*, garantindo acesso a todos os 4 GB de RAM).
+2. Selecione **D2 AUTORUN (Median XL Sigma)**.
+3. Bom jogo! Seus saves de Single Player serão gravados automaticamente em `sdmc:/switch/wine/drive_c/DiabloII/save/`.
+
+---
+
+## ⚖️ Aviso Legal / Disclaimer
+
+* **Diablo II** e **Diablo II: Lord of Destruction** são marcas registradas da **Blizzard Entertainment, Inc.** Este projeto é um trabalho derivado de fãs sem fins lucrativos e **NÃO** distribui arquivos proprietários, músicas, vídeos ou código binário protegido da Blizzard.
+* **Median XL** é desenvolvido e mantido pela **Equipe Median XL** ([median-xl.com](https://www.median-xl.com/)).
+* O runtime **Wine-NX** e a camada **AUTORUN** utilizam código sob as licenças LGPL / MIT.

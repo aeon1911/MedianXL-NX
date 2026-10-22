@@ -95,6 +95,15 @@ def validate_tree():
                 log(f"ALERTA: Removendo arquivo de log residual antes do zip: {os.path.join(root, f)}")
                 os.remove(os.path.join(root, f))
 
+        # Verificacao estrita de colisao de maiusculas/minusculas (incompativel com FAT32)
+        seen_case = {}
+        for f in files:
+            fl = f.lower()
+            if fl in seen_case:
+                log(f"FALHA FATAL FAT32: Colisao de case detectada em {root}: {seen_case[fl]} vs {f}")
+                sys.exit(1)
+            seen_case[fl] = f
+
     log("Validacao estrita concluida com 100% de sucesso!")
 
 def build_zip():

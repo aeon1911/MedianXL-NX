@@ -1,0 +1,12 @@
+--- a/dlls/wow64/virtual.c
++++ b/dlls/wow64/virtual.c
+@@ -537,6 +537,9 @@
+     ULONG *size32 = get_ptr( &args );
+     ULONG new_prot = get_ulong( &args );
+     ULONG *old_prot_ptr = get_ptr( &args );
++    ULONG scratch_old_prot = 0;
++
++    if (!old_prot_ptr) old_prot_ptr = &scratch_old_prot;
+ 
+     void *addr = ULongToPtr( *addr32 );
+     SIZE_T size = *size32;

@@ -1,0 +1,107 @@
+[
+  {
+    "folder": "1.07",
+    "core": "1.07",
+    "title": "1.07 LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": false
+  },
+  {
+    "folder": "1.08",
+    "core": "1.08",
+    "title": "1.08 LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": false
+  },
+  {
+    "folder": "1.09b",
+    "core": "1.09b",
+    "title": "1.09b LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": false
+  },
+  {
+    "folder": "1.09d",
+    "core": "1.09d",
+    "title": "1.09d LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "1.10f",
+    "core": "1.10f",
+    "title": "1.10f LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "1.11b",
+    "core": "1.11b",
+    "title": "1.11b LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "1.12a",
+    "core": "1.12a",
+    "title": "1.12a LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "1.13c",
+    "core": "1.13c",
+    "title": "1.13c LOD Vanilla",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "D2SE_Eastern Sun R6E 4.1N",
+    "core": "1.10f",
+    "title": "Eastern Sun",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "D2SE_Median XL Sigma 2.9.2",
+    "core": "1.13c",
+    "title": "Median XL:Sigma 2.9.2",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "D2SE_Nezeramontias 1.09 D2GL (ed.v.24.09.2024)",
+    "core": "1.10f",
+    "title": "Nezeramontias",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "D2SE_Zy-El 4.8.4.1 by Kenet (d2gl+reshade+QoL)",
+    "core": "1.10f",
+    "title": "Zy-El",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "D2SE_ZyEl_v44c_qol+rus",
+    "core": "1.09d",
+    "title": "Zy-El Trial by Fire",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "Disotheb",
+    "core": "1.10f",
+    "title": "Disotheb Full Version",
+    "hardware_test": "pending",
+    "d2pad_core_recognized_in_smoke": true
+  },
+  {
+    "folder": "ProjectD2",
+    "core": "1.13c",
+    "title": "Project Diablo 2",
+    "hardware_test": "pending",
+    "controller": "original mod; D2Pad excluded"
+  }
+]

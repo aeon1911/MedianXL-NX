@@ -1,0 +1,198 @@
+WINE REGISTRY Version 2
+;; All keys relative to \\User\\S-1-5-21-0-0-0-1000
+
+[Control Panel\\Accessibility\\AudioDescription] 1792479180
+#time=1dd605fa527ee00
+"Locale"=dword:00000000
+"On"="0"
+
+[Control Panel\\Accessibility\\Blind Access] 1792479180
+#time=1dd605fa527ee00
+"On"="0"
+
+[Control Panel\\Accessibility\\Keyboard Preference] 1792479180
+#time=1dd605fa527ee00
+"On"="1"
+
+[Control Panel\\Accessibility\\ShowSounds] 1792479180
+#time=1dd605fa527ee00
+"On"="0"
+
+[Control Panel\\Colors] 1792479180
+#time=1dd605fa527ee00
+
+[Control Panel\\Desktop] 1792479180
+#time=1dd605fa527ee00
+"ActiveWndTrackTimeout"=dword:00000000
+"BlockSendInputResets"="0"
+"CaretWidth"=dword:00000001
+"ClickLockTime"=dword:000004b0
+"DoubleClickHeight"="4"
+"DoubleClickWidth"="4"
+"DragFullWindows"="0"
+"DragHeight"="4"
+"DragWidth"="4"
+"FocusBorderHeight"=dword:00000001
+"FocusBorderWidth"=dword:00000001
+"FontSmoothing"="2"
+"FontSmoothingGamma"=dword:00000000
+"FontSmoothingOrientation"=dword:00000001
+"FontSmoothingType"=dword:00000001
+"ForegroundFlashCount"=dword:00000003
+"ForegroundLockTimeout"=dword:00000000
+"IconTitleWrap"="1"
+"LowPowerActive"="0"
+"MenuShowDelay"="0"
+"UserPreferencesMask"=hex:20,00,00,00,10,00,00,00
+"Wallpaper"=""
+"WheelScrollChars"="3"
+"WheelScrollLines"="3"
+
+[Control Panel\\Desktop\\WindowMetrics] 1792479180
+#time=1dd605fa527ee00
+"BorderWidth"="-15"
+"CaptionHeight"="-270"
+"CaptionWidth"="-270"
+"IconSpacing"="-1125"
+"IconTitleWrap"="1"
+"IconVerticalSpacing"="-1125"
+"MenuHeight"="-270"
+"MenuWidth"="-270"
+"PaddedBorderWidth"="0"
+"ScrollHeight"="-240"
+"ScrollWidth"="-240"
+"SmCaptionHeight"="-225"
+"SmCaptionWidth"="-225"
+
+[Control Panel\\International] 1792479178
+#time=1dd605fa3f6c100
+"iCalendarType"="1"
+"iCountry"="1"
+"iCurrDigits"="2"
+"iCurrency"="0"
+"iDate"="0"
+"iDigits"="2"
+"iFirstDayOfWeek"="6"
+"iFirstWeekOfYear"="0"
+"iLZero"="1"
+"iMeasure"="1"
+"iNegCurr"="0"
+"iNegNumber"="1"
+"iPaperSize"="1"
+"iTime"="0"
+"iTimePrefix"="0"
+"iTLZero"="0"
+"Locale"="00000409"
+"LocaleName"="en-US"
+"NumShape"="1"
+"s1159"="AM"
+"s2359"="PM"
+"sCountry"="United States"
+"sCurrency"="$"
+"sDate"="/"
+"sDecimal"="."
+"sGrouping"="3;0"
+"sLanguage"="ENU"
+"sList"=","
+"sLongDate"="dddd, MMMM d, yyyy"
+"sMonDecimalSep"="."
+"sMonGrouping"="3;0"
+"sMonThousandSep"=","
+"sNativeDigits"="0123456789"
+"sNegativeSign"="-"
+"sPositiveSign"=""
+"sShortDate"="M/d/yyyy"
+"sShortTime"="h:mm tt"
+"sThousand"=","
+"sTime"=":"
+"sTimeFormat"="h:mm:ss tt"
+"sYearMonth"="MMMM yyyy"
+
+[Control Panel\\International\\Geo] 1792479178
+#time=1dd605fa3f6c100
+"Name"="US"
+"Nation"="244"
+
+[Control Panel\\International\\\xd83c\xdf0e\xd83c\xdf0f\xd83c\xdf0d] 1792479177
+#time=1dd605fa35e2a80
+"Currencies"="USD"
+
+[Control Panel\\Keyboard] 1792479180
+#time=1dd605fa527ee00
+"KeyboardDelay"="1"
+"KeyboardSpeed"="31"
+
+[Control Panel\\Mouse] 1792479180
+#time=1dd605fa527ee00
+"ActiveWindowTracking"=dword:00000000
+"DoubleClickHeight"="4"
+"DoubleClickSpeed"="500"
+"DoubleClickWidth"="4"
+"MouseHoverHeight"="4"
+"MouseHoverTime"="50"
+"MouseHoverWidth"="4"
+"MouseSensitivity"="10"
+"MouseSpeed"="1"
+"MouseThreshold1"="6"
+"MouseThreshold2"="10"
+"SnapToDefaultButton"="0"
+"SwapMouseButtons"="0"
+
+[Control Panel\\Sound] 1792479180
+#time=1dd605fa527ee00
+"Beep"="Yes"
+
+[Keyboard Layout\\Preload] 1792479180
+#time=1dd605fa527ee00
+"1"="00000409"
+
+[Software\\Battle.net\\Configuration] 1792479671
+#time=1dd6060c9d09580
+"Diablo II Battle.net gateways"=str(7):"1001\00001\000127.0.0.1\0-1\0NONE\0"
+
+[Software\\Blizzard Entertainment\\Diablo II] 1792479671
+#time=1dd6060c9d09580
+"AllowHardcore"=dword:00000001
+"InstallPath"="C:\\DiabloII\\"
+"Save Path"="C:\\DiabloII\\save\\"
+
+[Software\\Blizzard Entertainment\\Diablo II\\VideoConfig] 1792482544
+#time=1dd60677a419800
+"dwFlags"=dword:00000000
+"dwFlags0"=dword:0000000b
+"dwFlags2"=dword:0000029b
+"Render"=dword:00000003
+
+[Software\\GLIDE3toOpenGL] 1792479671
+#time=1dd6060c9d09580
+"windowed"=dword:00000000
+
+[Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders] 1792479885
+#time=1dd6061495e6480
+
+[Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders] 1792479885
+#time=1dd6061495e6480
+
+[Software\\Wine\\AppDefaults\\D2SE.exe\\DllOverrides] 1792479171
+#time=1dd605f9fcaa380
+"ddraw"="builtin"
+"glide3x"="native"
+
+[Software\\Wine\\DllOverrides] 1792450320
+#time=1dd601c73416800
+
+[Software\\Wine\\Drivers] 1792480023
+#time=1dd60619b9f8580
+"Audio"="nxaudio"
+
+[Software\\Wine\\Drivers\\winenxaudio.drv\\devices\\0,audout] 1792480023
+#time=1dd60619b9f8580
+"guid"=hex:13,ca,87,e9,f2,bc,6e,4d,95,82,01,fe,55,0a,86,63
+
+[Software\\Wine\\Fonts] 1792482520
+#time=1dd60676bf37c00
+"Codepages"="1252,437"
+"LogPixels"=dword:00000060
+
+[Software\\Wine\\Fonts\\External Fonts] 1792479180
+#time=1dd605fa527ee00
