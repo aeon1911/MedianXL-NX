@@ -30,7 +30,7 @@ static char g_root[MAX_PATH];        /* pasta do D2SE.exe / Game.exe, com barra 
 static char g_entry[MAX_PATH];       /* pasta do core/mod ativo, com barra */
 static char g_folder[128];           /* ActiveFolder */
 static char g_core[16];
-static int g_is_d2se, g_is_pd2, g_is_vanilla, g_safe, g_entry_pad;
+static int g_is_d2se, g_is_pd2, g_is_mxl, g_is_vanilla, g_safe, g_entry_pad;
 static char g_cfg[MAX_PATH];         /* d2nx\d2nx.ini */
 
 static void lg(const char *fmt, ...)
@@ -739,7 +739,14 @@ static void swap_pad(void)
 static DWORD WINAPI worker(void *arg)
 {
     unsigned n;
+    HMODULE fog;
     (void)arg;
+
+    lg("Worker thread iniciada fora do loader lock");
+
+    fog = GetModuleHandleA("Fog.dll");
+    if (fog) patch_fog(fog);
+
     if (g_is_d2se) swap_pad();
     if (g_is_d2se) {
         int autostart = cfg_int("D2SE", "IniciarAutomatico", 1);
@@ -840,8 +847,6 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
     if (reason == DLL_PROCESS_ATTACH) {
         char exe[MAX_PATH], logp[MAX_PATH], *s;
         HANDLE th;
-        void *cookie;
-        LdrRegisterDllNotification_t reg;
         DisableThreadLibraryCalls(module);
         InitializeCriticalSection(&g_log_cs);
         GetModuleFileNameA(NULL, exe, sizeof(exe));
@@ -859,7 +864,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
         lg("==== D2Autorun %s (%s, pid %lu) ====", AUTORUN_VERSION, base_name(exe), GetCurrentProcessId());
         char sigma_path[MAX_PATH];
         snprintf(sigma_path, sizeof(sigma_path), "%sD2Sigma.dll", g_root);
-        int is_mxl = !g_is_d2se && file_exists(sigma_path);
+        g_is_mxl = !g_is_d2se && file_exists(sigma_path);
         if (g_is_d2se) {
             read_active_entry();
             lg("Entrada ativa: %s (core %s, %s)", g_folder, g_core[0] ? g_core : "?", g_is_vanilla ? "vanilla" : "mod");
@@ -867,7 +872,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             lstrcpynA(g_folder, "ProjectDiablo", sizeof(g_folder));
             lstrcpynA(g_core, "1.13c", sizeof(g_core));
             lstrcpynA(g_entry, g_root, sizeof(g_entry));
-        } else if (is_mxl) {
+        } else if (g_is_mxl) {
             lstrcpynA(g_folder, "MedianXL", sizeof(g_folder));
             lstrcpynA(g_core, "1.13c", sizeof(g_core));
             lstrcpynA(g_entry, g_root, sizeof(g_entry));
@@ -876,7 +881,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
         /* o D2Pad do mod e trocado por copia de arquivo (swap_pad); nenhum gancho de LoadLibrary para isso */
         g_redirect_pad = 0;
         g_safe = cfg_int("Geral", "ModoSeguro", 0);
-        if (is_mxl) {
+        if (g_is_mxl) {
             int v = GetPrivateProfileIntA("MedianXL", "ModoSeguro", -12345, g_cfg);
             g_safe = (v != -12345) ? v : 1;
         } else if (g_is_d2se && !g_is_vanilla) {
@@ -893,21 +898,8 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             install_hooks();
         }
 
-        /* O tratador vetorado (VEH) DEVE ser instalado em TODOS os casos.
-         * No Switch/Horizon OS e Wine ARM64, protecao W^X e ativada por hardware.
-         * Quando qualquer mod grava ganchos na memoria de codigo das DLLs, o Tegra X1 gera
-         * Access Violation (c0000005). O VEH intercepta a falha e libera a secao com PAGE_EXECUTE_READWRITE. */
-        AddVectoredExceptionHandler(1, veh);
-        lg("Tratador de excecoes vetorado (VEH c0000005) ativo para todos os modulos");
-
-        reg = (LdrRegisterDllNotification_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "LdrRegisterDllNotification");
-        if (reg) reg(0, on_dll, NULL, &cookie);
-
-        HMODULE fog = GetModuleHandleA("Fog.dll");
-        if (fog) patch_fog(fog);
-
         if (g_is_d2se) video_setup();
-        th = CreateThread(NULL, 0, worker, NULL, 0, NULL);
+        th = CreateThread(NULL, 2 * 1024 * 1024, worker, NULL, 0, NULL);
         if (th) CloseHandle(th);
     }
     return TRUE;
