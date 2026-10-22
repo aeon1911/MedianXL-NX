@@ -619,8 +619,12 @@ static void game_to_screen(float gx, float gy, int *sx, int *sy)
     *sy = (int)lroundf(g_oy + gy * g_sy);
 }
 
+enum { M_IDLE, M_MENU, M_PANEL, M_GAME };
+static int g_mode = M_IDLE;
+
 static float g_curx = 400, g_cury = 300;   /* cursor que controlamos, em coordenadas do jogo */
 static POINT g_last_set = { -1, -1 };
+static int g_cursor_parked = 0;
 /* o mouse tambem pode ser movido pela tela de toque do AUTORUN: segue a posicao real */
 static void sync_cursor(void)
 {
@@ -635,11 +639,27 @@ static void sync_cursor(void)
 static void move_cursor(float gx, float gy)
 {
     int sx, sy;
+    g_cursor_parked = 0;
     g_curx = clampf(gx, 1, g_resx - 2);
     g_cury = clampf(gy, 1, g_resy - 2);
     game_to_screen(g_curx, g_cury, &sx, &sy);
     send_mouse_abs(sx, sy);
     g_last_set.x = sx; g_last_set.y = sy;
+}
+
+static void park_cursor(void)
+{
+    if (!g_hwnd || g_cursor_parked) return;
+    int off_x = g_resx + 100;
+    int off_y = g_resy + 100;
+    PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM((WORD)(SHORT)off_x, (WORD)(SHORT)off_y));
+    if (g_client && g_ver && g_ver->mouse_x && g_ver->mouse_y) {
+        if (readable(g_client + g_ver->mouse_x, 4))
+            *(volatile DWORD *)(g_client + g_ver->mouse_x) = (DWORD)off_x;
+        if (readable(g_client + g_ver->mouse_y, 4))
+            *(volatile DWORD *)(g_client + g_ver->mouse_y) = (DWORD)off_y;
+    }
+    g_cursor_parked = 1;
 }
 
 /* Calibracao: move o mouse do sistema para dois pontos da janela e le onde o jogo o viu.
@@ -720,7 +740,7 @@ static void calibrate_tick(void)
             }
         }
         g_cal_ok = 1; g_cal_rect = rc; g_cal_resx = g_resx; g_cal_resy = g_resy;
-        move_cursor(g_curx, g_cury);
+        if (g_mode == M_GAME) park_cursor(); else move_cursor(g_curx, g_cury);
         break; }
     }
 }
@@ -893,7 +913,8 @@ static void world_to_game(float wx, float wy, float *gx, float *gy)
 enum { T_NONE, T_HOSTILE, T_INTERACT };
 typedef struct { int kind; DWORD unit; float gx, gy; float dist; } Target;
 
-static float g_face_x = 1, g_face_y = 0.5f;   /* direcao em que o heroi olha (tela) */
+static float g_face_x = 0.0f, g_face_y = 1.0f;   /* direcao em que o heroi olha (tela) - padrao baixo, nunca direita */
+static int g_face_valid = 0;
 
 static int monster_is_ally(const UnitInfo *u)
 {
@@ -926,7 +947,7 @@ static Target find_target(int want_hostile, int want_interact)
     float fl = sqrtf(g_face_x * g_face_x + g_face_y * g_face_y), fx, fy;
     float cone = cosf((cfg.aim_cone / 2.0f) * 3.14159265f / 180.0f);
     int town = is_town(g_level), i;
-    if (fl < 1e-3f) { g_face_x = 1; g_face_y = 0; fl = 1; }
+    if (fl < 1e-3f) { g_face_x = 0; g_face_y = 1; fl = 1; }
     if (g_debug > 1) {
         int k = 0;
         for (i = 0; i < g_nunits; i++) if (g_units[i].type == 1) k++;
@@ -1003,8 +1024,6 @@ static int target_point(DWORD unit, float *gx, float *gy)
 /* ======================================================================================
  * logica
  * ==================================================================================== */
-enum { M_IDLE, M_MENU, M_PANEL, M_GAME };
-static int g_mode = M_IDLE;
 static int g_walking;
 static int g_running_state;     /* 1 = o jogador quer correr */
 static DWORD g_walk_t0, g_run_tap;
@@ -1073,12 +1092,23 @@ static void release_all(void)
     for (i = 0; i < 256; i++) if (g_key_down[i]) send_key(i, 0);
     memset(g_hold, 0, sizeof(g_hold));
     g_walking = 0;
+    if (g_mode == M_GAME) park_cursor();
 }
 
 static void forward_point(float dist, float *gx, float *gy)
 {
+    if (!g_face_valid) {
+        *gx = g_anchor_x;
+        *gy = g_anchor_y;
+        return;
+    }
     float l = sqrtf(g_face_x * g_face_x + g_face_y * g_face_y);
-    float fx = l > 0 ? g_face_x / l : 1, fy = l > 0 ? g_face_y / l : 0;
+    if (l < 1e-3f) {
+        *gx = g_anchor_x;
+        *gy = g_anchor_y;
+        return;
+    }
+    float fx = g_face_x / l, fy = g_face_y / l;
     *gx = g_anchor_x + fx * dist;
     *gy = g_anchor_y + fy * dist * 0.75f;
 }
@@ -1187,6 +1217,7 @@ static void begin_attack(Hold *h, int right)
     if (h->stage == 2) {                 /* interagir: um clique, repete enquanto segurar */
         click(0, 0);
         h->last = GetTickCount();
+        if (g_mode == M_GAME) park_cursor();
         return;
     }
     if (h->shift) send_key(VK_SHIFT, 1);
@@ -1200,7 +1231,12 @@ static void continue_attack(Hold *h)
     if (h->stage == 2) {
         if (now - h->last > (DWORD)cfg.repeat_ms) {
             Target t = find_target(1, 1);
-            if (t.kind != T_NONE) { move_cursor(t.gx, t.gy); Sleep(10); click(0, 0); }
+            if (t.kind != T_NONE) {
+                move_cursor(t.gx, t.gy);
+                Sleep(10);
+                click(0, 0);
+                if (g_mode == M_GAME) park_cursor();
+            }
             h->last = now;
         }
         return;
@@ -1240,6 +1276,7 @@ static void end_attack(Hold *h)
     if (h->stage == 1) send_button(h->right, 0);
     if (h->shift) send_key(VK_SHIFT, 0);
     h->shift = 0;
+    if (g_mode == M_GAME) park_cursor();
 }
 
 static void start_action(int b, Act a)
@@ -1258,13 +1295,13 @@ static void start_action(int b, Act a)
     case A_RIGHT: begin_attack(h, 1); break;
     case A_KEY: tap_key(a.vk, a.mods); h->active = 0; break;
     case A_HOLD: key_mods(a.mods, 1); send_key(a.vk, 1); break;
-    case A_LCLICK: click(0, 0); h->active = 0; break;
-    case A_RCLICK: click(1, 0); h->active = 0; break;
-    case A_SHIFTCLICK: click(0, 1); h->active = 0; break;
-    case A_CTRLCLICK: click(0, 2); h->active = 0; break;
-    case A_SHIFTRCLICK: click(1, 1); h->active = 0; break;
-    case A_POPUP_R: do_popup(1); h->active = 0; break;
-    case A_POPUP_L: do_popup(0); h->active = 0; break;
+    case A_LCLICK: click(0, 0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_RCLICK: click(1, 0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_SHIFTCLICK: click(0, 1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_CTRLCLICK: click(0, 2); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_SHIFTRCLICK: click(1, 1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_POPUP_R: do_popup(1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_POPUP_L: do_popup(0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
     case A_TYPENAME: type_string("Switch"); h->active = 0; break;
     default: h->active = 0; break;
@@ -1398,34 +1435,70 @@ static int any_panel_open(void)
 }
 
 /* ======================================================================================
- * Menu de Gameplay (Switch) - In-Game OSD e Subclass da Janela
+ * Menu de Gameplay (Switch) - Fila Segura SPSC sem lock e sem deadlock
  * ==================================================================================== */
-#define WM_D2NX_PRINT_MSG (WM_APP + 777)
+#define D2NX_MSGQ_LEN 16
+#define D2NX_MSG_MAX  160
 
-static WNDPROC g_old_wndproc = NULL;
+typedef struct { wchar_t text[D2NX_MSG_MAX]; int color; } D2NXMsg;
+static D2NXMsg g_msgq[D2NX_MSGQ_LEN];
+static volatile LONG g_msgq_head = 0;
+static volatile LONG g_msgq_tail = 0;
+static HHOOK g_getmsg_hook = NULL;
+static DWORD g_game_tid = 0;
+
 typedef void (__stdcall *PrintGameString_t)(const wchar_t *msg, int color);
 static PrintGameString_t pPrintGameString = NULL;
 
-static LRESULT CALLBACK d2nx_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+static void drain_msgq(void)
 {
-    if (msg == WM_D2NX_PRINT_MSG) {
-        const wchar_t *wmsg = (const wchar_t *)lp;
-        int color = (int)wp;
-        if (pPrintGameString && wmsg) {
-            pPrintGameString(wmsg, color);
+    if (!pPrintGameString) return;
+    while (g_msgq_tail != g_msgq_head) {
+        D2NXMsg *m = &g_msgq[g_msgq_tail % D2NX_MSGQ_LEN];
+        if (m->text[0]) {
+            pPrintGameString(m->text, m->color);
         }
-        return 0;
+        InterlockedExchange(&g_msgq_tail, g_msgq_tail + 1);
     }
-    return CallWindowProcA(g_old_wndproc, hwnd, msg, wp, lp);
+}
+
+static LRESULT CALLBACK getmsg_hook(int code, WPARAM wp, LPARAM lp)
+{
+    if (code == HC_ACTION && wp == PM_REMOVE) {
+        drain_msgq();
+    }
+    return CallNextHookEx(g_getmsg_hook, code, wp, lp);
+}
+
+static void d2nx_install_hook(void)
+{
+    if (g_getmsg_hook || !g_hwnd) return;
+    g_game_tid = GetWindowThreadProcessId(g_hwnd, NULL);
+    if (g_game_tid) {
+        g_getmsg_hook = SetWindowsHookExW(WH_GETMESSAGE, getmsg_hook, NULL, g_game_tid);
+        lg("Hook WH_GETMESSAGE instalado na game thread tid=%lu: %p", g_game_tid, g_getmsg_hook);
+    }
+}
+
+static void d2nx_remove_hook(void)
+{
+    if (g_getmsg_hook) {
+        UnhookWindowsHookEx(g_getmsg_hook);
+        g_getmsg_hook = NULL;
+    }
 }
 
 static void d2_print_string(const wchar_t *wmsg, int color)
 {
-    if (!pPrintGameString || !wmsg) return;
-    if (g_hwnd && IsWindow(g_hwnd) && g_old_wndproc) {
-        SendMessageW(g_hwnd, WM_D2NX_PRINT_MSG, (WPARAM)color, (LPARAM)wmsg);
-    } else {
-        pPrintGameString(wmsg, color);
+    if (!pPrintGameString || !wmsg || !wmsg[0]) return;
+    LONG h = g_msgq_head;
+    if (h - g_msgq_tail >= D2NX_MSGQ_LEN) return;
+    D2NXMsg *m = &g_msgq[h % D2NX_MSGQ_LEN];
+    lstrcpynW(m->text, wmsg, D2NX_MSG_MAX);
+    m->color = color;
+    InterlockedExchange(&g_msgq_head, h + 1);
+    if (g_hwnd && IsWindow(g_hwnd)) {
+        PostMessageW(g_hwnd, WM_NULL, 0, 0);
     }
 }
 
@@ -1458,7 +1531,6 @@ typedef struct {
 } GameplayMenu;
 
 static GameplayMenu g_gp_menu;
-static int g_welcome_shown = 0;
 
 static void init_gameplay_menu_indices(void)
 {
@@ -1792,10 +1864,7 @@ static void tick(float dt)
         g_hwnd = find_game_window();
         g_cal_ok = 0;
         if (!g_hwnd) return;
-        if (!g_old_wndproc) {
-            g_old_wndproc = (WNDPROC)(LONG_PTR)SetWindowLongPtrA(g_hwnd, GWLP_WNDPROC, (LONG_PTR)d2nx_wndproc);
-            lg("WndProc subclass instalado: g_hwnd=%p, old=%p", g_hwnd, g_old_wndproc);
-        }
+        d2nx_install_hook();
     }
     poll_pad();
     fg = GetForegroundWindow();
@@ -1888,10 +1957,14 @@ static void tick(float dt)
         release_all();
         /* cada partida comeca com a preferencia do INI; L3 (tecla R) alterna depois */
         if (mode == M_GAME && g_mode == M_MENU) g_running_state = cfg.always_run;
+        if (mode == M_GAME) park_cursor();
         /* como no D2R: ao abrir o inventario o cursor vai para a primeira celula */
-        if (mode == M_PANEL && g_mode == M_GAME && !ui_open(UI_NPCSHOP) &&
-            (ui_open(UI_INVENTORY) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE)))
-            move_cursor(g_resx / 2 + 17 + 14.5f, g_resy / 2 + 14 + 14.5f);
+        if (mode == M_PANEL && g_mode == M_GAME) {
+            if (!ui_open(UI_NPCSHOP) && (ui_open(UI_INVENTORY) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE)))
+                move_cursor(g_resx / 2 + 17 + 14.5f, g_resy / 2 + 14 + 14.5f);
+            else
+                move_cursor(g_resx / 2.0f, g_resy / 2.0f);
+        }
         dbg("modo %d -> %d", g_mode, mode);
         g_mode = mode;
     }
@@ -1949,20 +2022,6 @@ static void tick(float dt)
         }
     }
 
-    if (mode == M_GAME && !g_welcome_shown) {
-        static DWORD s_welcome_t0;
-        if (!s_welcome_t0) s_welcome_t0 = GetTickCount();
-        if (GetTickCount() - s_welcome_t0 > 500) {
-            wchar_t wbuf[160];
-            d2_print_string(L"\xFFc4[D2NX] Controles Switch ativos! Segure ZL e aperte Minus para abrir o Menu.", 4);
-            _snwprintf(wbuf, sizeof(wbuf)/sizeof(wbuf[0]),
-                       L"\xFFc2[Gameplay] XP: %.1fx | Runas: %.1fx | Unicos: %.2fx | Raros: %.2fx | Ouro: %d",
-                       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
-            d2_print_string(wbuf, 2);
-            g_welcome_shown = 1;
-            lg("[D2NX] Mensagem de boas-vindas exibida na tela!");
-        }
-    }
 
     /* Atalho do Menu de Gameplay: ZL + Minus, Minus + Plus, ZL + Plus, ou F10 */
     int menu_toggle = 0;
@@ -2025,8 +2084,11 @@ static void tick(float dt)
     }
 
     /* direcao em que o heroi olha */
-    if (sqrtf(g_pad.rx * g_pad.rx + g_pad.ry * g_pad.ry) > 0.5f) { g_face_x = g_pad.rx; g_face_y = g_pad.ry; }
-    else if (sqrtf(g_pad.lx * g_pad.lx + g_pad.ly * g_pad.ly) > cfg.dz_left) { g_face_x = g_pad.lx; g_face_y = g_pad.ly; }
+    if (sqrtf(g_pad.rx * g_pad.rx + g_pad.ry * g_pad.ry) > 0.5f) {
+        g_face_x = g_pad.rx; g_face_y = g_pad.ry; g_face_valid = 1;
+    } else if (sqrtf(g_pad.lx * g_pad.lx + g_pad.ly * g_pad.ly) > cfg.dz_left) {
+        g_face_x = g_pad.lx; g_face_y = g_pad.ly; g_face_valid = 1;
+    }
 
     /* contexto de cada botao */
     g_layer = g_pad.down[B_ZL];
@@ -2076,9 +2138,17 @@ static void tick(float dt)
         } else if (g_walking) {
             send_button(0, 0);
             g_walking = 0;
+            park_cursor();
         }
         /* analogico direito: cursor livre (mirar manualmente / clicar no chao) */
-        if (!g_walking && !busy) cursor_from_stick(g_pad.rx, g_pad.ry, cfg.dz_right, dt);
+        if (!g_walking && !busy) {
+            float rm = sqrtf(g_pad.rx * g_pad.rx + g_pad.ry * g_pad.ry);
+            if (rm > cfg.dz_right) {
+                cursor_from_stick(g_pad.rx, g_pad.ry, cfg.dz_right, dt);
+            } else {
+                park_cursor();
+            }
+        }
     } else {
         sync_cursor();
         cursor_from_stick(g_pad.lx, g_pad.ly, cfg.dz_left, dt);
@@ -2139,6 +2209,7 @@ static DWORD WINAPI worker(void *arg)
         tick(dt);
     }
     release_all();
+    d2nx_remove_hook();
     return 0;
 }
 

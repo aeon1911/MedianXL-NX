@@ -23,9 +23,10 @@ touch build/ryujinx-test/sdcard/switch/wine/profile.txt
 sed -i 's/AutoJoin=0/AutoJoin=1/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
 sed -i 's/AutoWalk=0/AutoWalk=1/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
 
-# 4. Iniciar Ryujinx
+# 4. Iniciar Ryujinx (usando binario isolado para evitar conflito com outros processos)
 echo "Iniciando Ryujinx..."
-ryujinx \
+ln -sf "$(which ryujinx)" /tmp/ryujinx-d2
+/tmp/ryujinx-d2 \
     --root-data-dir "$BASE_DIR/build/ryujinx-test" \
     --handheld-mode \
     --hide-updates \
