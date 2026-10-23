@@ -89,7 +89,8 @@ Por questões legais e de direitos autorais da Blizzard Entertainment, **este re
 1. No Switch, entre no **Homebrew Menu** segurando `R` ao abrir qualquer jogo comercial (Modo *Title Override*, garantindo acesso a todos os 4 GB de RAM).
 2. Selecione **D2 AUTORUN (Median XL Sigma)**.
 3. Bom jogo! Seus saves de Single Player ficam em `sdmc:/switch/wine/drive_c/users/steamuser/AppData/Roaming/MedianXL/save/`.
-4. Na tela de nome do personagem, **R3** (ou L3 / Minus) escreve um nome pronto na caixa; o direcional edita (↑ avança e ↓ volta a letra, → acrescenta, ← apaga, Y sorteia outro) e **+** cria o personagem.
+4. No jogo: analógico esquerdo anda (movimento nativo, sem cursor), **A** ataca o monstro detectado, **X** usa a habilidade direita, **B** interage, **Y** abre o inventário; **ZL + −** abre o menu de cheats. Detalhes no `INSTALL.md` e regras no `RULES.md`.
+5. Na tela de nome do personagem, **R3** (ou L3 / Minus) escreve um nome pronto na caixa; o direcional edita (↑ avança e ↓ volta a letra, → acrescenta, ← apaga, Y sorteia outro) e **+** cria o personagem.
 
 ---
 

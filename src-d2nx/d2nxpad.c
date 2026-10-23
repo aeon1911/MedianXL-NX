@@ -78,7 +78,7 @@ enum Btn { B_A, B_B, B_X, B_Y, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_L3, B_R3
 static const char *btn_names[B_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
                                           "L3", "R3", "Up", "Down", "Left", "Right" };
 enum ActKind { A_NONE, A_ATTACK, A_SKILL, A_RIGHT, A_KEY, A_HOLD, A_LCLICK, A_RCLICK, A_SHIFTCLICK,
-               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD, A_OSK };
+               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD, A_OSK, A_INTERACT };
 typedef struct { BYTE kind; BYTE vk; BYTE mods; BYTE n; } Act;  /* mods: 1 shift 2 ctrl 4 alt */
 enum Ctx { C_GAME, C_LAYER, C_PLUS, C_PANEL, C_MENU, C_COUNT };
 static const char *ctx_names[C_COUNT] = { "Jogo", "Jogo.ZL", "Jogo.Mais", "Painel", "Menu" };
@@ -88,13 +88,14 @@ static struct {
     int enabled, pad_index;
     float dz_left, dz_right, trigger;
     int walk_radius, center_dy, always_run;
+    float run_at;
     int aim, aim_range, aim_cone, melee_range, interact_range, body_offset, ranged_distance;
     int stand_attack, repeat_ms;
     float cursor_speed, cursor_curve;
     int nav_step, nav_delay, nav_rate;
     int panel_shift;
     int skill_delay_ms;
-    int autojoin, autowalk, autocreate, cursortest;
+    int autojoin, autowalk, autocreate, cursortest, menutest;
     float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
     int start_gold;
 } cfg;
@@ -165,10 +166,11 @@ static const char *default_ini =
 "; As habilidades usam as teclas F1-F8 do jogo: na tela de habilidades (+ e ZR), passe o cursor\n"
 "; sobre a habilidade e aperte o botao para gravar.\n"
 "[Jogo]\n"
-"B=ATTACK\n"
-"Y=SKILL:1\n"
-"A=SKILL:2\n"
-"X=SKILL:3\n"
+"; analogico esquerdo = movimento nativo (sem mouse); A/X/B usam o alvo detectado na tela\n"
+"A=ATTACK\n"
+"X=RIGHT\n"
+"B=INTERACT\n"
+"Y=KEY:I\n"
 "R=SKILL:4\n"
 "ZR=SKILL:5\n"
 "ZL=LAYER\n"
@@ -296,6 +298,7 @@ static Act parse_act(const char *v)
     else if (!lstrcmpiA(buf, "TYPENAME")) a.kind = A_TYPENAME;
     else if (!lstrcmpiA(buf, "KEYBOARD")) a.kind = A_KEYBOARD;
     else if (!lstrcmpiA(buf, "OSK")) a.kind = A_OSK;
+    else if (!lstrcmpiA(buf, "INTERACT")) a.kind = A_INTERACT;
     else if (!strncasecmp(buf, "KEY:", 4) || !strncasecmp(buf, "HOLD:", 5)) {
         char *k = buf + (buf[0] == 'K' || buf[0] == 'k' ? 4 : 5);
         a.kind = (buf[0] == 'K' || buf[0] == 'k') ? A_KEY : A_HOLD;
@@ -343,6 +346,13 @@ static void load_config(void)
     cfg.walk_radius = ini_int("Movimento", "RaioAndar", 120);
     cfg.center_dy = ini_int("Movimento", "AjusteCentroY", -28);
     cfg.always_run = ini_int("Movimento", "SempreCorrer", 1);
+    {   /* inclinacao do analogico (0-1, depois da zona morta) a partir da qual o heroi corre */
+        char v[32];
+        GetPrivateProfileStringA("Movimento", "IntensidadeCorrer", "0.65", v, sizeof(v), g_ini);
+        cfg.run_at = (float)atof(v);
+        if (cfg.run_at < 0.0f || cfg.run_at > 1.0f) cfg.run_at = 0.65f;
+        if (!cfg.always_run) cfg.run_at = 2.0f;   /* SempreCorrer=0: so anda */
+    }
     cfg.aim = ini_int("Mira", "MiraAssistida", 1);
     cfg.aim_range = ini_int("Mira", "Alcance", 25);
     cfg.aim_cone = ini_int("Mira", "Cone", 110);
@@ -365,6 +375,7 @@ static void load_config(void)
     cfg.autowalk = ini_int("AutoTest", "AutoWalk", 0);
     cfg.autocreate = ini_int("AutoTest", "AutoCreate", 0);
     cfg.cursortest = ini_int("AutoTest", "CursorTest", 0);
+    cfg.menutest = ini_int("AutoTest", "MenuTest", 0);
     if (cfg.autocreate) cfg.autojoin = 0;   /* AutoCreate faz o proprio caminho pelos menus */
     if (cfg.autojoin || cfg.autowalk || cfg.autocreate)
         lg("AutoTest ativo: autojoin=%d autowalk=%d autocreate=%d", cfg.autojoin, cfg.autowalk, cfg.autocreate);
@@ -696,43 +707,107 @@ static void park_cursor(void)
 
 /* Cursor oculto na partida. O D2Client 1.13c desenha o cursor em duas rotinas sem argumentos, ambas pela
  * posicao do mouse do jogo (+0x11B828/+0x11B824) e pelo D2Gfx: +0x16870 (a principal: imagem pelo tipo de
- * cursor em +0x11B838[tipo], quadro animado, posicao limitada a tela) e +0x15FC0 (imagem fixa de
- * +0x11B850). Com so uma delas desligada o cursor piscava no Ryujinx. Trocando o 1o byte de cada uma por
- * ret o cursor nao e desenhado, e o mouse do jogo continua valendo para andar/atacar. Com painel ou menu
- * aberto os bytes originais voltam. So e aplicado se os bytes conferem (1.13c original). */
-static BYTE *g_cursor_fn[2];
-static BYTE g_cursor_orig[2];
+ * cursor em +0x11B838[tipo], quadro animado) e +0x15FC0 (imagem fixa de +0x11B850). As duas rodam a cada
+ * quadro na thread do jogo. A +0x16870 vira um salto para frame_hook (camada nativa + menu de cheats), que
+ * so chama o desenho original quando ha painel/menu aberto; a +0x15FC0 vira ret nesse mesmo estado. */
+static BYTE *g_cursor_fn2, g_cursor_orig2;
+static BYTE *g_cursor_tramp;
+static volatile LONG g_cursor_hide_now = 0;
 static int g_cursor_hidden = -1;
-static void cursor_draw_init(void)
+static void __cdecl frame_hook(void);
+static void draw_init(void);
+static DWORD g_cmd_fn;                 /* D2Client+0x2A7C0, conferido em native_init */
+static void native_init(void)
 {
-    BYTE *a, *b;
-    if (!g_ver || strcmp(g_ver->name, "1.13c") || !g_ver->mouse_x || !g_ver->mouse_y) return;
+    BYTE *a, *b, *c, *t;
+    DWORD old;
+    if (!g_ver || strcmp(g_ver->name, "1.13c") || !g_ver->mouse_x || !g_ver->mouse_y) {
+        lg("camada nativa: so existe para o D2Client 1.13c original");
+        return;
+    }
     a = (BYTE *)(g_client + 0x16870);   /* mov eax,[mouse_x] */
     b = (BYTE *)(g_client + 0x15FC0);   /* sub esp,48h / mov edx,[mouse_y] */
-    if (a[0] == 0xA1 && *(DWORD *)(a + 1) == g_client + g_ver->mouse_x &&
-        b[0] == 0x83 && b[1] == 0xEC && b[2] == 0x48 && b[3] == 0x8B && b[4] == 0x15 &&
-        *(DWORD *)(b + 5) == g_client + g_ver->mouse_y) {
-        g_cursor_fn[0] = a; g_cursor_orig[0] = a[0];
-        g_cursor_fn[1] = b; g_cursor_orig[1] = b[0];
-        lg("cursor: rotinas de desenho do D2Client em %p e %p (ocultas na partida sem painel aberto)", a, b);
-    } else {
-        lg("cursor: rotinas de desenho nao conferem (%02X %02X), cursor nao sera ocultado", a[0], b[0]);
+    c = (BYTE *)(g_client + 0x2A7C0);   /* sub esp,20h / push esi / mov esi,eax / call */
+    if (!(a[0] == 0xA1 && *(DWORD *)(a + 1) == g_client + g_ver->mouse_x &&
+          b[0] == 0x83 && b[1] == 0xEC && b[2] == 0x48 && b[3] == 0x8B && b[4] == 0x15 &&
+          *(DWORD *)(b + 5) == g_client + g_ver->mouse_y &&
+          c[0] == 0x83 && c[1] == 0xEC && c[2] == 0x20 && c[3] == 0x56 && c[4] == 0x8B && c[5] == 0xF0 && c[6] == 0xE8)) {
+        lg("camada nativa: bytes do D2Client nao conferem (%02X %02X %02X), nada alterado", a[0], b[0], c[0]);
+        return;
     }
+    t = VirtualAlloc(NULL, 16, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!t) return;
+    memcpy(t, a, 5);                                      /* instrucao original */
+    t[5] = 0xE9; *(DWORD *)(t + 6) = (DWORD)((a + 5) - (t + 10));   /* volta para +5 */
+    VirtualProtect(t, 16, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 16);
+    g_cursor_tramp = t;
+    g_cursor_fn2 = b; g_cursor_orig2 = b[0];
+    g_cmd_fn = (DWORD)c;
+    if (!VirtualProtect(a, 5, PAGE_EXECUTE_READWRITE, &old)) return;
+    a[0] = 0xE9; *(DWORD *)(a + 1) = (DWORD)((BYTE *)frame_hook - (a + 5));
+    VirtualProtect(a, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), a, 5);
+    lg("camada nativa: gancho por quadro em %p, comando do jogador em %p, cursor oculto sem painel", a, c);
 }
 static void set_cursor_hidden(int hide)
 {
     DWORD old;
-    int i;
-    if (!g_cursor_fn[0] || hide == g_cursor_hidden) return;
-    for (i = 0; i < 2; i++) {
-        if (!VirtualProtect(g_cursor_fn[i], 1, PAGE_EXECUTE_READWRITE, &old)) return;
-        g_cursor_fn[i][0] = hide ? 0xC3 : g_cursor_orig[i];
-        VirtualProtect(g_cursor_fn[i], 1, old, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_cursor_fn[i], 1);
+    if (!g_cursor_tramp || hide == g_cursor_hidden) return;
+    InterlockedExchange(&g_cursor_hide_now, hide);
+    if (VirtualProtect(g_cursor_fn2, 1, PAGE_EXECUTE_READWRITE, &old)) {
+        g_cursor_fn2[0] = hide ? 0xC3 : g_cursor_orig2;
+        VirtualProtect(g_cursor_fn2, 1, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_cursor_fn2, 1);
     }
     dbg("cursor %s", hide ? "oculto" : "visivel");
     g_cursor_hidden = hide;
 }
+
+/* ======================================================================================
+ * camada nativa (RULES.md: NATIVE ANALOG MOVEMENT)
+ * Movimento e acoes do heroi passam pela rotina de comando do jogador do D2Client 1.13c (+0x2A7C0), a
+ * mesma para onde um clique termina: eax = unidade do jogador, ebx/edi = destino (x,y do mundo) ou alvo
+ * (tipo,id), pilha = comando e 0. Ela faz a acao localmente (caminho, colisao, animacao: +0x2A750) e manda
+ * o comando ao servidor (+0x29FA0 -> +0x143E0). Sem cursor, mouse ou clique. Comandos: 1 andar ate (x,y),
+ * 3 correr ate (x,y), 4 correr ate a unidade, 5/0x0C habilidade esq./dir. em (x,y), 6/0x0D na unidade,
+ * 0x13 interagir. So pode ser chamada na thread do jogo: o D2NXPad so registra a intencao e o gancho por
+ * quadro (rotina de desenho do cursor, +0x16870) executa.
+ * ==================================================================================== */
+enum { NC_WALK = 1, NC_RUN_TO_UNIT = 4, NC_RUN = 3, NC_LEFT_AT = 5, NC_LEFT_UNIT = 6, NC_RIGHT_AT = 0x0C,
+       NC_RIGHT_UNIT = 0x0D, NC_INTERACT = 0x13 };
+static int do_command(DWORD unit, DWORD a, DWORD b, DWORD cmd)
+{
+    DWORD fn = g_cmd_fn, u = unit;
+    if (!fn || !unit) return 0;
+    __asm__ __volatile__ (
+        "pushl $0\n\t"
+        "pushl %%ecx\n\t"
+        "call *%%edx\n\t"
+        : "+a"(u), "+b"(a), "+D"(b), "+c"(cmd), "+d"(fn)
+        :
+        : "esi", "memory", "cc");
+    return (int)u;
+}
+
+/* fila de comandos avulsos (D2NXPad -> thread do jogo) */
+typedef struct { int cmd; DWORD a, b; } NatCmd;
+#define NATQ 32
+static NatCmd g_natq[NATQ];
+static volatile LONG g_natq_head, g_natq_tail;
+static void native_queue(int cmd, DWORD a, DWORD b)
+{
+    LONG h = g_natq_head;
+    if (h - g_natq_tail >= NATQ) return;
+    g_natq[h % NATQ].cmd = cmd; g_natq[h % NATQ].a = a; g_natq[h % NATQ].b = b;
+    InterlockedExchange(&g_natq_head, h + 1);
+}
+
+/* intencao de movimento: direcao no mundo (vetor unitario), andar/correr; 0 = parado */
+static volatile LONG g_mv_active, g_mv_run;
+static volatile float g_mv_wx, g_mv_wy;
+static volatile LONG g_mv_busy;        /* um ataque esta segurado: o movimento espera */
+static volatile LONG g_frames;         /* quadros vistos pelo gancho (diagnostico) */
 
 static void calibrate_tick(void)
 {
@@ -1004,80 +1079,10 @@ static int target_still_valid(DWORD unit)
         }
     return 0;
 }
-static int target_point(DWORD unit, float *gx, float *gy)
-{
-    int i;
-    for (i = 0; i < g_nunits; i++)
-        if (g_units[i].unit == unit) {
-            world_to_game(g_units[i].x, g_units[i].y, gx, gy);
-            *gy -= g_units[i].type == 1 ? cfg.body_offset : 0;
-            return 1;
-        }
-    return 0;
-}
-
 /* ======================================================================================
  * logica
  * ==================================================================================== */
-static int g_walking;
-static int g_running_state;     /* 1 = o jogador quer correr */
-static DWORD g_walk_t0, g_run_tap;
-static float g_walk_px, g_walk_py; static int g_walk_kicks;
-
-/* vigia: analogico segurado e o heroi parado -> solta modificadores perdidos e repete o clique */
-static DWORD g_wd_t;
-static void walk_watchdog(void)
-{
-    DWORD now = GetTickCount();
-    float d;
-    if (!g_player || now - g_walk_t0 < 700) return;
-    if (!g_wd_t) g_wd_t = g_walk_t0;
-    d = fabsf(g_px - g_walk_px) + fabsf(g_py - g_walk_py);
-    if (d > 0.3f) {                                     /* andou: novo ponto de referencia */
-        g_walk_px = g_px; g_walk_py = g_py; g_wd_t = now; g_walk_kicks = 0;
-        return;
-    }
-    if (now - g_wd_t < 800) return;
-    g_wd_t = now;                                       /* parado: repete o clique a cada 0,8 s */
-    if (g_walk_kicks < 3) lg("Heroi parado com o analogico segurado: reenviando clique (%d)", g_walk_kicks + 1);
-    if (!g_key_down[VK_SHIFT]) send_key(VK_SHIFT, 0);
-    if (!g_key_down[VK_CONTROL]) send_key(VK_CONTROL, 0);
-    if (!g_key_down[VK_MENU]) send_key(VK_MENU, 0);
-    send_button(0, 0); Sleep(15); send_button(0, 1);
-    g_walk_kicks++;
-}
-
-/* modos do jogador: 2 andar, 3 correr, 6 andar na cidade. O jogo guarda o estado
- * andar/correr por conta propria; aqui so corrigimos quando ele diverge do desejado. */
-static void enforce_run(void)
-{
-    static DWORD tap_mode, tap_level; static int fails, no_town_run;
-    DWORD m, now = GetTickCount();
-    int walk_mode;
-    if (!g_player) return;
-    m = rd32(g_player + U_MODE);
-    { static DWORD lm; if (m != lm) { dbg("modo do jogador %lu", m); lm = m; } }
-    if (now - g_walk_t0 < 350 || now - g_run_tap < 1200) return;
-    /* ate a 1.09 nao se corre na cidade: o modo 6 nao diz nada */
-    walk_mode = m == 2 || (m == 6 && U_MODE != 0x0C && !no_town_run);
-    if (tap_mode) {                       /* a ultima tecla R mudou alguma coisa? */
-        if (m == 6 && tap_mode == 6 && (DWORD)g_level == tap_level) {
-            /* 1.10 e anteriores: nao da para correr na cidade */
-            if (!no_town_run) lg("Correr na cidade nao suportado nesta versao");
-            no_town_run = 1; walk_mode = 0;
-        } else if (m == tap_mode && (DWORD)g_level == tap_level && ++fails >= 2) {
-            lg("Correr automatico desativado: o jogo nao responde a tecla R neste modo (%lu)", m);
-            g_running_state = -1;
-        }
-        tap_mode = 0;
-    }
-    if (g_running_state < 0) return;
-    if ((g_running_state && walk_mode) || (!g_running_state && m == 3)) {
-        dbg("correr: modo %lu, desejado %d -> tecla R", m, g_running_state);
-        tap_key('R', 0);
-        g_run_tap = now; tap_mode = m; tap_level = (DWORD)g_level;
-    }
-}
+static int g_running_state;     /* 1 = correr (a tecla R do jogo nao e mais usada pelo D2NXPad) */
 
 /* acao em andamento de um botao */
 typedef struct { int active; Act act; int stage; DWORD t0, last; DWORD unit; int shift; int right; } Hold;
@@ -1092,52 +1097,9 @@ static void release_all(void)
     if (g_rbtn) send_button(1, 0);
     for (i = 0; i < 256; i++) if (g_key_down[i]) send_key(i, 0);
     memset(g_hold, 0, sizeof(g_hold));
-    g_walking = 0;
+    InterlockedExchange(&g_mv_active, 0);
+    InterlockedExchange(&g_mv_busy, 0);
     if (g_mode == M_GAME) park_cursor();
-}
-
-static void forward_point(float dist, float *gx, float *gy)
-{
-    if (!g_face_valid) {
-        *gx = g_anchor_x;
-        *gy = g_anchor_y;
-        return;
-    }
-    float l = sqrtf(g_face_x * g_face_x + g_face_y * g_face_y);
-    if (l < 1e-3f) {
-        *gx = g_anchor_x;
-        *gy = g_anchor_y;
-        return;
-    }
-    float fx = g_face_x / l, fy = g_face_y / l;
-    *gx = g_anchor_x + fx * dist;
-    *gy = g_anchor_y + fy * dist * 0.75f;
-}
-
-/* ponto de andar que nao fique em cima de um monstro/NPC (clique nele atacaria/falaria) */
-static void walk_point(float dx, float dy, float *gx, float *gy)
-{
-    static const float scales[] = { 1.0f, 0.75f, 1.3f, 0.55f };
-    static const float rots[] = { 0, 0.26f, -0.26f, 0.5f, -0.5f };
-    unsigned si, ri;
-    for (si = 0; si < 4; si++)
-        for (ri = 0; ri < 5; ri++) {
-            float c = cosf(rots[ri]), s = sinf(rots[ri]);
-            float ux = dx * c - dy * s, uy = dx * s + dy * c;
-            float px = g_anchor_x + ux * cfg.walk_radius * scales[si];
-            float py = g_anchor_y + uy * cfg.walk_radius * scales[si] * 0.8f;
-            int i, blocked = 0;
-            for (i = 0; i < g_nunits && !blocked; i++) {
-                float ux2, uy2;
-                if (g_units[i].type != 1 && g_units[i].type != 4) continue;
-                world_to_game(g_units[i].x, g_units[i].y, &ux2, &uy2);
-                if (g_units[i].type == 1) uy2 -= cfg.body_offset;
-                if (fabsf(ux2 - px) < 26 && fabsf(uy2 - py) < 34) blocked = 1;
-            }
-            if (!blocked) { *gx = px; *gy = py; return; }
-        }
-    *gx = g_anchor_x + dx * cfg.walk_radius;
-    *gy = g_anchor_y + dy * cfg.walk_radius * 0.8f;
 }
 
 static void click(int right, int mods)
@@ -1176,90 +1138,91 @@ static Act binding(int ctx, int b)
     return a;
 }
 
-/* ataque/habilidade com mira: estagio 0 = escolher alvo e apertar, 1 = segurando */
+/* ======================================================================================
+ * acoes nativas (sem mouse): alvo por deteccao na tela, comando direto na unidade
+ * ==================================================================================== */
+static DWORD unit_id(DWORD u) { return rd32(u + 0x0C); }
+/* modos do jogador em que ele pode receber outro comando (parado, andando, correndo, levando golpe) */
+static int player_ready(void)
+{
+    DWORD m = g_player ? rd32(g_player + U_MODE) : 0;
+    return m == 1 || m == 2 || m == 3 || m == 4 || m == 5 || m == 6;
+}
+/* direcao em que o heroi olha, no mundo (para atacar/lancar sem alvo) */
+static void face_world(float *wx, float *wy)
+{
+    float sx = g_face_x, sy = g_face_y, x, y, l;
+    if (!g_face_valid || (fabsf(sx) < 1e-3f && fabsf(sy) < 1e-3f)) { sx = 0; sy = 1; }
+    x = sx / 16.0f + sy / 8.0f; y = sy / 8.0f - sx / 16.0f;
+    l = sqrtf(x * x + y * y);
+    *wx = l > 1e-6f ? x / l : 0.7071f; *wy = l > 1e-6f ? y / l : 0.7071f;
+}
+/* um comando de ataque/habilidade: no alvo (tipo,id) ou, sem alvo, no chao a frente do heroi */
+static void attack_command(Hold *h)
+{
+    int right = h->right;
+    if (h->unit) {
+        native_queue(right ? NC_RIGHT_UNIT : NC_LEFT_UNIT, rd32(h->unit), unit_id(h->unit));
+    } else {
+        float wx, wy;
+        face_world(&wx, &wy);
+        native_queue(right ? NC_RIGHT_AT : NC_LEFT_AT, (DWORD)(g_px + wx * 6.0f + 0.5f), (DWORD)(g_py + wy * 6.0f + 0.5f));
+    }
+    h->last = GetTickCount();
+}
+/* estagio 1 = ataque/habilidade segurado; 2 = interagir */
 static void begin_attack(Hold *h, int right)
 {
-    Target t = cfg.aim ? find_target(1, !right) : (Target){ T_NONE, 0, 0, 0, 0 };
-    float gx, gy;
+    Target t = cfg.aim ? find_target(1, 0) : (Target){ T_NONE, 0, 0, 0, 0 };
     h->right = right;
-    h->shift = 0;
-    h->unit = 0;
-    if (g_walking) { send_button(0, 0); g_walking = 0; }
-    if (t.kind != T_NONE) {
-        gx = t.gx; gy = t.gy;
-        h->unit = t.unit;
-        h->stage = (t.kind == T_INTERACT) ? 2 : 1;
-    } else if (is_town(g_level) && !right) {
-        /* cidade sem alvo: nao anda (como no D2R); segue procurando enquanto segurar */
-        h->stage = 2;
-        h->last = GetTickCount();
-        return;
-    } else {
-        forward_point((float)cfg.ranged_distance, &gx, &gy);
-        h->stage = 1;
-        if (cfg.stand_attack) h->shift = 1;
-    }
-    move_cursor(gx, gy);
-    if (h->stage == 2) {                 /* interagir: um clique, repete enquanto segurar */
-        click(0, 0);
-        h->last = GetTickCount();
-        if (g_mode == M_GAME) park_cursor();
-        return;
-    }
-    if (h->shift) send_key(VK_SHIFT, 1);
-    send_button(right, 1);
-    h->last = GetTickCount();
+    h->stage = 1;
+    h->unit = t.kind == T_HOSTILE ? t.unit : 0;
+    InterlockedExchange(&g_mv_busy, 1);
+    if (!h->unit && is_town(g_level) && !right) { h->last = GetTickCount(); return; }  /* cidade sem alvo: nada */
+    attack_command(h);
+    dbg("%s: %s", right ? "habilidade direita" : "ataque", h->unit ? "no alvo" : "a frente");
 }
 static void continue_attack(Hold *h)
 {
-    float gx, gy;
     DWORD now = GetTickCount();
-    if (h->stage == 2) {
-        if (now - h->last > (DWORD)cfg.repeat_ms) {
-            Target t = find_target(1, 1);
-            if (t.kind != T_NONE) {
-                move_cursor(t.gx, t.gy);
-                click(0, 0);
-                if (g_mode == M_GAME) park_cursor();
+    if (h->stage == 2) {                                   /* interagir: anda ate o alvo e interage */
+        int i;
+        for (i = 0; i < g_nunits; i++)
+            if (g_units[i].unit == h->unit) {
+                float d = sqrtf((g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py));
+                if (d <= 3.0f && !h->shift) {
+                    native_queue(NC_INTERACT, rd32(h->unit), unit_id(h->unit));
+                    h->shift = 1;                          /* uma interacao por toque */
+                    dbg("interagir: alvo a %.1f, comando enviado", d);
+                }
+                break;
             }
-            h->last = now;
-        }
         return;
     }
-    if (h->unit) {
-        if (target_still_valid(h->unit) && target_point(h->unit, &gx, &gy)) {
-            move_cursor(gx, gy);
-        } else if (now - h->last > 120) {   /* alvo morreu: procura outro */
-            Target t = find_target(1, 0);
-            send_button(h->right, 0);
-            if (h->shift) { send_key(VK_SHIFT, 0); h->shift = 0; }
-            if (t.kind == T_HOSTILE) { h->unit = t.unit; move_cursor(t.gx, t.gy); }
-            else { h->unit = 0; forward_point((float)cfg.ranged_distance, &gx, &gy); move_cursor(gx, gy);
-                   if (cfg.stand_attack) { h->shift = 1; send_key(VK_SHIFT, 1); } }
-            send_button(h->right, 1);
-            h->last = now;
-        }
-    } else if (now - h->last > 200) {        /* sem alvo: procura enquanto segura */
+    if (!h->unit || !target_still_valid(h->unit)) {        /* sem alvo ou alvo morreu: procura de novo */
         Target t = find_target(1, 0);
-        if (t.kind == T_HOSTILE) {
-            send_button(h->right, 0);
-            if (h->shift) { send_key(VK_SHIFT, 0); h->shift = 0; }
-            h->unit = t.unit;
-            move_cursor(t.gx, t.gy);
-            send_button(h->right, 1);
-        } else {
-            forward_point((float)cfg.ranged_distance, &gx, &gy);
-            move_cursor(gx, gy);
-        }
-        h->last = now;
+        DWORD was = h->unit;
+        h->unit = t.kind == T_HOSTILE ? t.unit : 0;
+        if (h->unit && h->unit != was) dbg("%s: novo alvo", h->right ? "habilidade direita" : "ataque");
     }
+    if (!h->unit && is_town(g_level) && !h->right) return;
+    /* repete so quando o heroi terminou o golpe anterior: sem alternancia nem rajada */
+    if (now - h->last >= 120 && player_ready()) attack_command(h);
 }
 static void end_attack(Hold *h)
 {
-    if (h->stage == 1) send_button(h->right, 0);
-    if (h->shift) send_key(VK_SHIFT, 0);
+    (void)h;
+    InterlockedExchange(&g_mv_busy, 0);
+}
+static void begin_interact(Hold *h)
+{
+    Target t = find_target(0, 1);
+    h->stage = 2;
     h->shift = 0;
-    if (g_mode == M_GAME) park_cursor();
+    h->unit = t.kind == T_INTERACT ? t.unit : 0;
+    if (!h->unit) { h->active = 0; return; }
+    native_queue(NC_RUN_TO_UNIT, rd32(h->unit), unit_id(h->unit));
+    dbg("interagir: indo ate o alvo tipo %lu", rd32(h->unit));
 }
 
 /* Abre o teclado flutuante do Autorun (Wine-NX), o mesmo do atalho - + R3. O texto digitado
@@ -1408,6 +1371,7 @@ static void start_action(int b, Act a)
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
     case A_TYPENAME: type_string("Switch"); h->active = 0; break;
     case A_KEYBOARD: if (g_mode == M_GAME) open_keyboard(); else ned_begin(NULL); h->active = 0; break;
+    case A_INTERACT: begin_interact(h); break;
     case A_OSK: open_keyboard(); h->active = 0; break;
     default: h->active = 0; break;
     }
@@ -1436,7 +1400,7 @@ static void update_action(int b)
     DWORD now = GetTickCount();
     if (!h->active) return;
     switch (h->act.kind) {
-    case A_ATTACK: case A_RIGHT: continue_attack(h); break;
+    case A_ATTACK: case A_RIGHT: case A_INTERACT: continue_attack(h); break;
     case A_SKILL:
         if (h->stage == 0 && now - h->t0 >= (DWORD)cfg.skill_delay_ms) begin_attack(h, 1);
         else if (h->stage) continue_attack(h);
@@ -1846,47 +1810,115 @@ static void apply_and_save_gameplay_menu(void)
        cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
 }
 
+/* O menu e desenhado a cada quadro pelo gancho (draw_cheat_menu); aqui so marca a atualizacao. */
 static void d2_render_gameplay_menu(void)
 {
-    wchar_t line[160];
-    
-    d2_print_string(L"\xFFc4=== MENU DE GAMEPLAY (SWITCH) ===", 4);
-
-    _snwprintf(line, sizeof(line)/sizeof(line[0]),
-               g_gp_menu.cur_item == 0 ? L"\xFFc2> Multiplicador XP:  [\xFFc8 %.1fx \xFFc2]  \xFFc5(1.0x-10x)"
-                                       : L"\xFFc0  Multiplicador XP:  [\xFFc4 %.1fx \xFFc0]",
-               g_xp_opts[g_gp_menu.xp_idx]);
-    d2_print_string(line, 0);
-
-    _snwprintf(line, sizeof(line)/sizeof(line[0]),
-               g_gp_menu.cur_item == 1 ? L"\xFFc2> Queda de Runas:    [\xFFc8 %.1fx \xFFc2]  \xFFc5(1.0x-5.0x)"
-                                       : L"\xFFc0  Queda de Runas:    [\xFFc4 %.1fx \xFFc0]",
-               g_rune_opts[g_gp_menu.rune_idx]);
-    d2_print_string(line, 0);
-
-    _snwprintf(line, sizeof(line)/sizeof(line[0]),
-               g_gp_menu.cur_item == 2 ? L"\xFFc2> Itens Unicos:      [\xFFc8 %.2fx \xFFc2]  \xFFc5(1.0x-3.0x)"
-                                       : L"\xFFc0  Itens Unicos:      [\xFFc4 %.2fx \xFFc0]",
-               g_unique_opts[g_gp_menu.unique_idx]);
-    d2_print_string(line, 0);
-
-    _snwprintf(line, sizeof(line)/sizeof(line[0]),
-               g_gp_menu.cur_item == 3 ? L"\xFFc2> Itens Raros:       [\xFFc8 %.2fx \xFFc2]  \xFFc5(1.0x-3.0x)"
-                                       : L"\xFFc0  Itens Raros:       [\xFFc4 %.2fx \xFFc0]",
-               g_rare_opts[g_gp_menu.rare_idx]);
-    d2_print_string(line, 0);
-
-    d2_print_string(g_gp_menu.cur_item == 4 ? L"\xFFc2> Ouro Inicial Lv1:  \xFFc1indisponivel no Median XL"
-                                            : L"\xFFc0  Ouro Inicial Lv1:  \xFFc1indisponivel", 0);
-
-    if (g_gp_menu.cur_item == 5)
-        d2_print_string(L"\xFFc2>>> [ SALVAR E APLICAR ] <<<", 2);
-    else
-        d2_print_string(L"\xFFc3    [ SALVAR E APLICAR ]", 3);
-
-    d2_print_string(L"\xFFc5(D-Pad: Navega/Altera | A: Salva | B / ZL+Minus: Sair)", 5);
-
     g_gp_menu.last_refresh = GetTickCount();
+}
+
+/* Desenho nativo do jogo, conferido nas chamadas do proprio D2Client 1.13c:
+ * D2Win 10150 DrawText (fastcall: texto, x, y, cor, 0), D2Win 10184 SetFont (fastcall: fonte),
+ * D2Gfx 10014 DrawRectangle (stdcall: x1, y1, x2, y2, cor, transparencia). */
+typedef void (__fastcall *D2DrawText_t)(const wchar_t *, int, int, int, int);
+typedef DWORD (__fastcall *D2SetFont_t)(DWORD);
+typedef void (__stdcall *D2DrawRect_t)(int, int, int, int, DWORD, DWORD);
+static D2DrawText_t pDrawText;
+static D2SetFont_t pSetFont;
+static D2DrawRect_t pDrawRect;
+static wchar_t g_menu_status[96];
+static DWORD g_menu_status_t;
+
+static void draw_init(void)
+{
+    HMODULE w = GetModuleHandleA("D2Win.dll"), gx = GetModuleHandleA("D2gfx.dll");
+    if (w) {
+        pDrawText = (D2DrawText_t)(void *)GetProcAddress(w, (LPCSTR)10150);
+        pSetFont = (D2SetFont_t)(void *)GetProcAddress(w, (LPCSTR)10184);
+    }
+    if (gx) pDrawRect = (D2DrawRect_t)(void *)GetProcAddress(gx, (LPCSTR)10014);
+    lg("desenho nativo: DrawText %p, SetFont %p, DrawRectangle %p", pDrawText, pSetFont, pDrawRect);
+}
+
+static void menu_status(const wchar_t *msg)
+{
+    lstrcpynW(g_menu_status, msg, sizeof(g_menu_status) / sizeof(g_menu_status[0]));
+    g_menu_status_t = GetTickCount();
+}
+
+static void draw_cheat_menu(void)
+{
+    static const wchar_t *names[MENU_ITEM_COUNT] = {
+        L"Multiplicador de XP", L"Queda de runas", L"Itens unicos", L"Itens raros", L"Ouro inicial", L"Salvar e aplicar"
+    };
+    wchar_t line[128];
+    int i, x = 48, y = 92, lh = 24;
+    if (!pDrawText || !pSetFont) return;
+    if (pDrawRect) pDrawRect(x - 16, y - 34, x + 470, y + lh * (MENU_ITEM_COUNT + 2) + 8, 0, 1);
+    pSetFont(1);
+    pDrawText(L"MENU DE CHEATS", x, y, 4, 0);
+    pSetFont(0);
+    for (i = 0; i < MENU_ITEM_COUNT; i++) {
+        int sel = g_gp_menu.cur_item == i;
+        switch (i) {
+        case 0: _snwprintf(line, 128, L"%ls %ls: < %.1fx >", sel ? L">" : L" ", names[i], g_xp_opts[g_gp_menu.xp_idx]); break;
+        case 1: _snwprintf(line, 128, L"%ls %ls: < %.1fx >", sel ? L">" : L" ", names[i], g_rune_opts[g_gp_menu.rune_idx]); break;
+        case 2: _snwprintf(line, 128, L"%ls %ls: < %.2fx >", sel ? L">" : L" ", names[i], g_unique_opts[g_gp_menu.unique_idx]); break;
+        case 3: _snwprintf(line, 128, L"%ls %ls: < %.2fx >", sel ? L">" : L" ", names[i], g_rare_opts[g_gp_menu.rare_idx]); break;
+        case 4: _snwprintf(line, 128, L"%ls %ls: indisponivel no Median XL", sel ? L">" : L" ", names[i]); break;
+        default: _snwprintf(line, 128, L"%ls [ %ls ]", sel ? L">" : L" ", names[i]); break;
+        }
+        line[127] = 0;
+        pDrawText(line, x, y + lh * (i + 1) + 4, i == 4 ? 5 : sel ? 2 : 0, 0);
+    }
+    pDrawText(L"Direcional: escolhe/altera   A: aplica   B: fecha", x, y + lh * (MENU_ITEM_COUNT + 1) + 4, 5, 0);
+    if (g_menu_status[0] && GetTickCount() - g_menu_status_t < 5000)
+        pDrawText(g_menu_status, x, y + lh * (MENU_ITEM_COUNT + 2) + 4, 4, 0);
+}
+
+#define MOVE_REACH 7.0f      /* subtiles a frente do heroi a cada ordem de movimento */
+#define MOVE_REPEAT_MS 130   /* intervalo entre ordens enquanto o analogico estiver inclinado */
+
+/* Um quadro do jogo, na thread do jogo: comandos nativos, movimento, mensagens e menu. */
+static void game_frame(void)
+{
+    static int was_moving;
+    static DWORD last_mv;
+    DWORD now = GetTickCount(), player;
+    float px, py;
+    InterlockedIncrement(&g_frames);
+    player = (g_ver && g_ver->player) ? rd32(g_client + g_ver->player) : 0;
+    while (g_natq_tail != g_natq_head) {
+        NatCmd c = g_natq[g_natq_tail % NATQ];
+        InterlockedExchange(&g_natq_tail, g_natq_tail + 1);
+        if (player) do_command(player, c.a, c.b, (DWORD)c.cmd);
+    }
+    if (player && g_mv_active && !g_mv_busy) {
+        if (now - last_mv >= MOVE_REPEAT_MS && unit_pos(player, 0, &px, &py)) {
+            float tx = px + g_mv_wx * MOVE_REACH, ty = py + g_mv_wy * MOVE_REACH;
+            do_command(player, (DWORD)(tx + 0.5f), (DWORD)(ty + 0.5f), g_mv_run ? NC_RUN : NC_WALK);
+            last_mv = now;
+            was_moving = 1;
+        }
+    } else if (was_moving) {
+        /* analogico solto: ordem de andar ate onde o heroi esta = para ali (o ataque tem prioridade) */
+        if (player && !g_mv_busy && unit_pos(player, 0, &px, &py))
+            do_command(player, (DWORD)(px + 0.5f), (DWORD)(py + 0.5f), NC_WALK);
+        was_moving = 0;
+        last_mv = 0;
+    }
+    drain_msgq();
+    if (g_gp_menu.open) draw_cheat_menu();
+}
+
+static void __cdecl frame_hook(void)
+{
+    static int logged;
+    game_frame();
+    if (!g_cursor_hide_now) {
+        if (!logged) { logged = 1; lg("gancho: chamando o desenho original do cursor (tipo %ld)", (long)rd32(g_client + 0x11B854)); }
+        ((void (*)(void))g_cursor_tramp)();
+        if (logged == 1) { logged = 2; lg("gancho: desenho original do cursor voltou"); }
+    }
 }
 
 static BOOL CALLBACK enum_win_proc(HWND w, LPARAM lp)
@@ -2060,6 +2092,71 @@ static void autocreate_tick(int mode)
     }
 }
 
+/* AutoTest AutoWalk=2: cenario de aceitacao da camada nativa (injeta o analogico/botao como o controle):
+ * zona morta, inclinacao leve, diagonal maxima, soltar, sair da cidade para o leste e segurar A no campo.
+ * Registra a cada 0,5 s posicao, modo do jogador, mouse do jogo (tem de ficar parado: nada de mouse) e alvo. */
+/* analogico que aponta do heroi para um ponto do mundo (como uma pessoa dirigindo ate la) */
+static int stick_toward(float tx, float ty, float *lx, float *ly)
+{
+    float dx = tx - g_px, dy = ty - g_py, sx, sy, l;
+    if (dx * dx + dy * dy < 9.0f) return 0;            /* chegou (3 subtiles) */
+    sx = (dx - dy) * 16.0f; sy = (dx + dy) * 8.0f;    /* mundo -> tela */
+    l = sqrtf(sx * sx + sy * sy);
+    *lx = sx / l * 0.95f; *ly = sy / l * 0.95f;
+    return 1;
+}
+static void autowalk_acceptance(DWORD t)
+{
+    static DWORD last_log, ph_t0;
+    static int phase = 0;
+    float lx = 0, ly = 0;
+    int press_a = 0, press_b = 0, press_x = 0, next = phase;
+    DWORD in = t - ph_t0;
+    switch (phase) {
+    case 0: if (t >= 10000) next = 1; break;                                   /* lagada de entrada */
+    case 1: lx = 0.12f; ly = 0.05f; if (in >= 3000) next = 2; break;           /* zona morta: nao anda */
+    case 2: lx = 0.40f; if (in >= 3000) next = 3; break;                       /* leve: anda */
+    case 3: if (in >= 3000) next = 4; break;                                   /* solto andando: para */
+    case 4: lx = 1.0f; ly = 1.0f; if (in >= 2000) next = 40; break;            /* diagonal do quadrado */
+    case 40: {                                                                 /* vai ate o NPC mais perto */
+        int i, best = -1; float bd = 1e9f;
+        for (i = 0; i < g_nunits; i++)
+            if (g_units[i].type == 1 && (g_units[i].flags & 0x2) && !monster_is_ally(&g_units[i])) {
+                float d = (g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py);
+                if (d < bd) { bd = d; best = i; }
+            }
+        if (best < 0 || bd < 36.0f || in >= 15000) next = 42;
+        else stick_toward(g_units[best].x, g_units[best].y, &lx, &ly);
+        break;
+    }
+    case 42: press_b = in < 300; if (in >= 6000) next = 41; break;             /* B: interagir */
+    case 41: press_b = in < 300; if (in >= 3000) next = 5; break;              /* B de novo: fecha o painel */
+    case 5: if (!stick_toward(4340.0f, 5444.0f, &lx, &ly) || in >= 15000) next = 6; break;
+    case 6: if (!stick_toward(4480.0f, 5446.0f, &lx, &ly) || (g_level > 0 && !is_town(g_level)) || in >= 30000) next = 7; break;
+    case 7: if (!stick_toward(4560.0f, 5446.0f, &lx, &ly) || in >= 8000) next = 8; break;   /* entra no campo */
+    case 8: press_a = 1; if (in >= 15000) next = 81; break;                     /* segura A */
+    case 81: press_x = 1; if (in >= 6000) next = 9; break;                      /* segura X */
+    default: break;
+    }
+    if (next != phase) {
+        phase = next; ph_t0 = t;
+        lg("[Aceite] fase %d (t=%lus)", phase, t / 1000);
+    }
+    g_pad.connected = 1;
+    g_pad.lx = lx; g_pad.ly = ly;
+    g_pad.down[B_A] = press_a;
+    g_pad.down[B_B] = press_b;
+    g_pad.down[B_X] = press_x;
+    if (t - last_log >= 500 && phase > 0) {
+        Target tg = find_target(1, 0);
+        last_log = t;
+        lg("[Aceite] t=%.1fs fase %d analogico %.2f,%.2f A=%d B=%d X=%d pos %.1f,%.1f modo %lu nivel %d painel %d mouse %ld,%ld alvo %s quadros %ld",
+           t / 1000.0f, phase, lx, ly, press_a, press_b, press_x, g_px, g_py, g_player ? rd32(g_player + U_MODE) : 0, g_level,
+           any_panel_open(), g_ver ? (long)rd32(g_client + g_ver->mouse_x) : -1, g_ver ? (long)rd32(g_client + g_ver->mouse_y) : -1,
+           tg.kind == T_HOSTILE ? "monstro" : "nenhum", (long)g_frames);
+    }
+}
+
 static void tick(float dt)
 {
     int b, ctx, mode, editing;
@@ -2171,6 +2268,16 @@ static void tick(float dt)
         }
     }
     mode = !g_player ? M_MENU : any_panel_open() ? M_PANEL : M_GAME;
+    if (mode != g_mode && g_player) {
+        static const int ids[] = { UI_INVENTORY, UI_CHARACTER, UI_SKILLTREE, UI_NPCMENU, UI_GAMEMENU, UI_CONFIG,
+                                   UI_NPCSHOP, UI_ANVIL, UI_QUEST, UI_WAYPOINT, UI_PARTY, UI_TRADE, UI_STASH,
+                                   UI_CUBE, UI_HELP, UI_MERC, UI_MSGLOG, UI_SCROLL };
+        char b[96] = "";
+        unsigned i;
+        for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
+            if (ui_open(ids[i])) snprintf(b + strlen(b), sizeof(b) - strlen(b), " 0x%02X", ids[i]);
+        lg("modo %d -> %d (paineis abertos:%s)", g_mode, mode, b[0] ? b : " nenhum");
+    }
     set_cursor_hidden(mode == M_GAME);
     if (cfg.cursortest && g_player) {   /* AutoTest CursorTest=1: abre o inventario aos 6 s e fecha aos 14 s */
         static DWORD t_in; static int step;
@@ -2239,7 +2346,7 @@ static void tick(float dt)
         cfg.autojoin = 0;
     }
 
-    if (mode == M_GAME && cfg.autowalk) {
+    if ((mode == M_GAME || (mode == M_PANEL && cfg.autowalk == 2)) && cfg.autowalk) {
         static DWORD s_walk_t0;
         DWORD now = GetTickCount();
         if (!s_walk_t0) s_walk_t0 = now;
@@ -2249,6 +2356,8 @@ static void tick(float dt)
                 g_pad.lx = 0.85f;
                 g_pad.ly = 0.30f;
             }
+        } else if (cfg.autowalk == 2) {
+            autowalk_acceptance(now - s_walk_t0);
         } else if (now - s_walk_t0 > 1500 && now - s_walk_t0 < 1500 + (DWORD)cfg.autowalk * 1000) {
             /* AutoWalk=N: anda N segundos sem parar, girando a direcao a cada 3 s (teste de congelamento) */
             static const float dirs[4][2] = { { 0.85f, 0.30f }, { 0.30f, 0.85f }, { -0.85f, -0.30f }, { -0.30f, -0.85f } };
@@ -2266,6 +2375,27 @@ static void tick(float dt)
         }
     }
 
+
+    if (cfg.menutest && mode == M_GAME) {
+        /* AutoTest MenuTest=1: pelos botoes, como o jogador: ZL+- abre, baixo, direita, A aplica, B fecha */
+        static DWORD t_in;
+        static const struct { DWORD t0, t1; int b; const char *what; } seq[] = {
+            { 10000, 10900, B_ZL, "ZL" }, { 10300, 10600, B_MINUS, "- (com ZL): abre" },
+            { 13000, 13200, B_DOWN, "baixo" }, { 14500, 14700, B_RIGHT, "direita" },
+            { 16500, 16700, B_A, "A: aplica" }, { 19500, 19700, B_B, "B: fecha" },
+        };
+        DWORD now = GetTickCount(), t;
+        unsigned i;
+        if (!t_in) t_in = now;
+        t = now - t_in;
+        static int said[8];
+        for (i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+            int on = t >= seq[i].t0 && t < seq[i].t1;
+            if (on && !said[i]) { said[i] = 1; lg("[MenuTest] botao %s", seq[i].what); }
+            if (on) g_pad.down[seq[i].b] = 1;
+        }
+        g_pad.connected = 1;
+    }
 
     /* Atalho do Menu de Gameplay: ZL + Minus, Minus + Plus, ZL + Plus, ou F10 */
     int menu_toggle = 0;
@@ -2310,15 +2440,10 @@ static void tick(float dt)
             d2_render_gameplay_menu();
         } else if (PRESSED(B_A)) {
             apply_and_save_gameplay_menu();
-            d2_print_string(L"\xFFc2[D2NX] CONFIGURACOES SALVAS! Valem a partir do proximo boot do jogo.", 2);
-            wchar_t wbuf[160];
-            _snwprintf(wbuf, sizeof(wbuf)/sizeof(wbuf[0]),
-                       L"\xFFc4XP: %.1fx | Runas: %.1fx | Unicos: %.2fx | Raros: %.2fx",
-                       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier);
-            d2_print_string(wbuf, 4);
+            menu_status(L"Salvo. Vale a partir do proximo boot do jogo.");
         } else if (PRESSED(B_B)) {
             g_gp_menu.open = 0;
-            d2_print_string(L"\xFFc5[D2NX] Menu de gameplay fechado.", 5);
+            lg("[GameplayMenu] Menu fechado (B).");
         } else if (GetTickCount() - g_gp_menu.last_refresh > 4000) {
             d2_render_gameplay_menu();
         }
@@ -2365,36 +2490,29 @@ static void tick(float dt)
         }
     }
 
-    /* movimento */
+    /* movimento: analogico esquerdo -> direcao no mundo -> rotina de comando do jogo (camada nativa).
+     * Nenhum mouse/cursor/clique. Zona morta configuravel; a inclinacao e limitada a 1 (diagonal do
+     * quadrado nao passa da velocidade das direcoes retas); inclinacao leve anda, forte corre. */
     if (mode == M_GAME) {
-        float m = sqrtf(g_pad.lx * g_pad.lx + g_pad.ly * g_pad.ly);
+        float lx = g_pad.lx, ly = g_pad.ly, m = sqrtf(lx * lx + ly * ly);
         int busy = 0;
         for (b = 0; b < B_COUNT; b++)
             if (g_hold[b].active && (g_hold[b].act.kind == A_ATTACK || g_hold[b].act.kind == A_SKILL ||
                                      g_hold[b].act.kind == A_RIGHT)) busy = 1;
-        if (m > cfg.dz_left && !busy) {
-            float gx, gy;
-            walk_point(g_pad.lx / m, g_pad.ly / m, &gx, &gy);
-            move_cursor(gx, gy);
-            if (!g_walking) {
-                send_button(0, 1); g_walking = 1; g_walk_t0 = GetTickCount(); g_wd_t = 0;
-                g_walk_px = g_px; g_walk_py = g_py; g_walk_kicks = 0;
-            } else { enforce_run(); walk_watchdog(); }
-        } else if (g_walking) {
-            send_button(0, 0);
-            g_walking = 0;
-            park_cursor();
+        InterlockedExchange(&g_mv_busy, busy);
+        if (m > cfg.dz_left) {
+            float k = m > 1.0f ? 1.0f : m, inten = (k - cfg.dz_left) / (1.0f - cfg.dz_left);
+            float sx = lx / m, sy = ly / m;                        /* direcao na tela (y para baixo) */
+            float wx = sx / 16.0f + sy / 8.0f, wy = sy / 8.0f - sx / 16.0f, wl = sqrtf(wx * wx + wy * wy);
+            g_mv_wx = wx / wl; g_mv_wy = wy / wl;                  /* tela isometrica -> mundo */
+            InterlockedExchange(&g_mv_run, inten >= cfg.run_at);
+            InterlockedExchange(&g_mv_active, 1);
+        } else {
+            InterlockedExchange(&g_mv_active, 0);
         }
-        /* analogico direito: cursor livre (mirar manualmente / clicar no chao) */
-        if (!g_walking && !busy) {
-            float rm = sqrtf(g_pad.rx * g_pad.rx + g_pad.ry * g_pad.ry);
-            if (rm > cfg.dz_right) {
-                cursor_from_stick(g_pad.rx, g_pad.ry, cfg.dz_right, dt);
-            } else {
-                park_cursor();
-            }
-        }
+        /* analogico direito: so a direcao de mira (ataque/habilidade sem alvo); o cursor fica oculto */
     } else {
+        InterlockedExchange(&g_mv_active, 0);
         sync_cursor();
         cursor_from_stick(g_pad.lx, g_pad.ly, cfg.dz_left, dt);
         cursor_from_stick(g_pad.rx, g_pad.ry, cfg.dz_right, dt);
@@ -2428,7 +2546,8 @@ static DWORD WINAPI worker(void *arg)
         if (g_ver_override.print_msg) merged.print_msg = g_ver_override.print_msg;
         g_ver = &merged;
         lg("Diablo II %s detectado (D2Client %08lX)", g_ver->name, g_client);
-        cursor_draw_init();
+        native_init();
+        draw_init();
     } else {
         IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)(g_client + ((IMAGE_DOS_HEADER *)g_client)->e_lfanew);
         lg("D2Client desconhecido (timestamp %08lX, tamanho %lX): modo cursor", nt->FileHeader.TimeDateStamp,

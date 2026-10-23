@@ -1,4 +1,5 @@
 @AGENTS.md
+@RULES.md
 
 # Contexto do projeto (handoff do Antigravity → Claude Code, 23/10/2026)
 
@@ -52,6 +53,10 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
   apagar = `WM_KEYDOWN VK_BACK` (WM_CHAR 8 não apaga); SendInput/keybd_event/PostMessage de WM_KEYDOWN
   funcionam para teclas do jogo — usar UM caminho só (antes os 3 juntos alternavam painéis 2-3 vezes).
   Mensagens postadas são entregues antes da entrada do SendInput (não misturar na mesma sequência).
+- **Camada nativa (RULES.md)**: movimento/ações pela rotina de comando do jogador do D2Client (+0x2A7C0),
+  executada na thread do jogo pelo gancho por quadro em +0x16870 (rotina do cursor). Proibido voltar a
+  andar/atacar por mouse. Menu de cheats desenhado nesse gancho (D2Win 10150/10184, D2Gfx 10014).
+  Mapeamento no jogo: A=ATTACK, X=RIGHT, B=INTERACT, Y=I. Teste: `tools/run_acceptance_ryujinx.sh` (17 critérios).
 - **"Anda dois passos e congela"** = caixa de chat aberta por um Enter atrasado do menu (herói não anda com
   chat aberto). D2NXPad fecha o chat se abrir sem Enter pedido. `WH_GETMESSAGE` NÃO funciona no Wine-NX.
 - **Cursor oculto na partida**: rotinas de desenho do D2Client 1.13c +0x16870 e +0x15FC0 viram `ret` sem

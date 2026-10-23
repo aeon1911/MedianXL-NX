@@ -48,7 +48,7 @@ while [ $SECONDS -lt $end ] && kill -0 $RYU 2>/dev/null; do
     fi
     if [ -n "$win" ] && grep -q 'AutoCreate\] classe' "$D2/d2nx/d2nxpad.log" 2>/dev/null; then
         n=$((n + 1)); f="$SHOTS/$(printf %03d $n).png"
-        timeout 15 import -window $win "$f" 2>/dev/null && echo "$(date -u +%T) $(basename "$f")" >> "$SHOTS/times.txt"
+        timeout 15 import -silent -window $win "$f" 2>/dev/null && echo "$(date -u +%T) $(basename "$f")" >> "$SHOTS/times.txt"
     fi
     if grep -q -E '\[AutoCreate\] (SUCESSO 2/2|FALHA)' "$D2/d2nx/d2nxpad.log" 2>/dev/null; then sleep 3; break; fi
 done

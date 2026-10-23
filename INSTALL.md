@@ -68,28 +68,27 @@ Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6
 
 ---
 
-## 4. Mapeamento de Controles do D2PAD
+## 4. Mapeamento de Controles do D2NXPad
 
-O controle do jogo foi desenvolvido pelo usuário através do **D2PAD** (`src-d2nx/d2nxpad.c`), operando de forma 100% in-process via chamadas XInput nativas mapeadas no driver HID do Switch:
+O movimento e as ações do herói usam a **rotina de comando do próprio jogo** (camada nativa, ver `RULES.md`):
+nada de mouse, cursor ou clique simulado. Dentro do jogo o cursor fica oculto enquanto nenhum painel está aberto.
 
-| Botão / Alavanca | Ação no Diablo II / Median XL | Função / Comportamento |
-|---|---|---|
-| **Alavanca Esquerda (L-Stick)** | Movimentação Analógica Direta | O herói corre e se desloca na direção exata do analógico. |
-| **Alavanca Direita (R-Stick)** | Cursor do Mouse Virtual | Movimenta o ponteiro livremente na tela para menus e mira. |
-| **Botão A** | Clique Esquerdo do Mouse | Ataque principal, interagir com NPCs, coletar itens do chão. |
-| **Botão B** | Clique Direito do Mouse | Ataque secundário / Habilidade ativa selecionada com botão direito. |
-| **Botão X** | Mirar Parado (Shift) / Skill 1 | Mantém o herói fixo disparando magias ou ataques sem andar. |
-| **Botão Y** | Exibir Itens (Alt / Show Items) | Liga/desliga a exibição de nomes dos itens caídos no chão. |
-| **Gatilho ZL** | Poção de Vida (Cinto Slot 1) | Consome instantaneamente a poção de cura do slot 1 do cinto. |
-| **Gatilho ZR** | Poção de Mana (Cinto Slot 2) | Consome instantaneamente a poção de mana do slot 2 do cinto. |
-| **Botão L** | Abrir Inventário (`I`) | Alterna abertura e fechamento da mochila/inventário. |
-| **Botão R** | Árvore de Habilidades (`T`) | Alterna abertura da tela de Skills para alocar pontos. |
-| **D-Pad Cima** | Slot 3 do Cinto | Poção de Rejuvenescimento ou slot 3. |
-| **D-Pad Baixo** | Slot 4 do Cinto | Poção de Portal da Cidade (TP) ou slot 4. |
-| **D-Pad Esquerda / Direita** | Troca Rápida de Armas (`W`) | Alterna entre o conjunto primário e secundário de armas/escudos. |
-| **Botão Plus (+)** | Menu de Pausa / Opções (`ESC`) | Abre o menu de configurações, salvar e sair do jogo. |
-| **Botão Minus (-)** | Automap (`Tab`) | Alterna a exibição do mapa de navegação translúcido na tela. |
-| **Clique R-Stick (R3)** | Centralizar Cursor | Reposiciona instantaneamente o ponteiro do mouse sobre o personagem. |
+| Botão / Alavanca | Ação no Diablo II / Median XL |
+|---|---|
+| **Analógico esquerdo** | Movimento direto na direção apontada. Inclinação leve anda, inclinação forte corre; soltar para o herói. Zona morta em `[Movimento] ZonaMortaEsquerda`, ponto de correr em `IntensidadeCorrer`. |
+| **Analógico direito** | Direção de mira para atacar/lançar sem alvo. |
+| **A** | Ataque (habilidade esquerda) no monstro mais próximo detectado na tela; segurando, repete a cada golpe e troca de alvo quando ele morre. Sem monstro (fora da cidade), golpeia à frente. |
+| **X** | Habilidade direita no monstro detectado (ou à frente). |
+| **B** | Interagir: vai até o NPC, baú, portal ou item mais próximo e interage. |
+| **Y** | Inventário (`I`). |
+| **L** (segurar) | Mostrar itens no chão (`Alt`). |
+| **R / ZR** | Habilidades 4 / 5 (tecla F4/F5 + habilidade direita no alvo). |
+| **ZL** (segurar) | Camada: Y/A/X = habilidades 6/7/8, B = ataque, D-pad = Shift+1..4. |
+| **Plus (+)** | Toque: menu do jogo (`ESC`). Segurando: atalhos (Y inventário, X personagem, A habilidades, B missões...). |
+| **Minus (−)** | Automapa (`Tab`). |
+| **ZL + − (ou − + +)** | **Menu de cheats** (XP, runas, únicos, raros). Direcional escolhe/altera, **A** aplica, **B** fecha. Vale a partir do próximo boot do jogo. |
+| **R3** | Trocar armas (`W`). |
+| **D-Pad** | Cinto: poções 1–4. |
 
 ### Fora da partida (menu principal, seleção e criação de personagem)
 

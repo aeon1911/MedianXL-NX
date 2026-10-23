@@ -121,3 +121,29 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
 - Testes: `AutoWalk=N` (N > 1) anda N segundos girando a direção e registra a posição a cada segundo;
   `run_fase3_ryujinx_test.sh` agora exige que o herói mude de posição (≥ 10 posições em 40 s) — o
   critério antigo ("30 s no mundo") aprovava o herói parado. `CursorTest=1` abre/fecha o inventário.
+
+### H. 23/10/2026 (noite) — camada nativa de movimento/ações e menu de cheats visível (RULES.md)
+- **Causa raiz** do movimento por mouse: o D2NXPad (reescrita do D2PAD) andava apontando o mouse do jogo
+  para um ponto à frente do herói e segurando o clique (`walk_point` + `send_button`), atacava movendo o
+  mouse até o monstro e clicando, e alternava andar/correr apertando `R`. Daí o cursor visível, o herói que
+  parava quando o jogo perdia o "clique segurado" e os ataques intermitentes. A/X/Y eram `SKILL:2/3/1`
+  (tecla F + clique direito no alvo ou à frente com Shift), então os três atacavam.
+- **Camada nativa** (`d2nxpad.c`): a rotina de desenho do cursor do D2Client (+0x16870, chamada a cada
+  quadro na thread do jogo) vira um salto para `frame_hook`, que executa os comandos pela rotina de comando
+  do jogador do D2Client (+0x2A7C0 — a mesma para onde um clique termina: ação local com caminho/colisão/
+  animação + comando ao servidor). O analógico vira direção no mundo (inversa da projeção isométrica),
+  limitada a 1 (diagonal), com zona morta; ordens "andar/correr até (x,y)" 7 subtiles à frente a cada
+  130 ms; soltar = "andar até onde está". Nenhuma chamada de mouse no jogo (o mouse do jogo fica parado
+  em 1023,767 durante todo o teste).
+- **Botões**: A = `ATTACK` (comando 6, habilidade esquerda na unidade tipo/id), X = `RIGHT` (0x0D), B =
+  `INTERACT` (4 correr até a unidade, depois 0x13 interagir), Y = `KEY:I`. Sem alvo: comando no chão à frente
+  (5/0x0C); na cidade A sem alvo não faz nada. Segurando, o comando só se repete quando o herói terminou o
+  golpe (modos 1–6) e procura outro alvo quando o atual morre.
+- **Menu de cheats** (ZL+−, −++, ZL++ ou F10): desenhado a cada quadro pelo gancho com as funções do
+  próprio jogo (D2Win 10150 DrawText, 10184 SetFont, D2Gfx 10014 DrawRectangle — assinaturas conferidas nas
+  chamadas do D2Client). Antes as linhas iam para uma fila esvaziada por um `WH_GETMESSAGE` que nunca
+  instalou no Wine-NX, por isso o menu era invisível. Ações: XP, runas, únicos e raros (A aplica: grava o ini
+  e regera `experience_sp/itemratio_sp/treasureclassex.bin`); ouro inicial segue indisponível.
+- **Teste**: `tools/run_acceptance_ryujinx.sh` (AutoWalk=2 + MenuTest=1) avalia 17 critérios pelo log:
+  17/17 no Ryujinx. Um bug no próprio log de teste (argumento faltando no `lg`) derrubou o emulador 4 vezes
+  com acesso a 0x16 até ser achado — não era a camada nativa.
