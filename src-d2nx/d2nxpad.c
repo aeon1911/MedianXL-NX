@@ -78,7 +78,7 @@ enum Btn { B_A, B_B, B_X, B_Y, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_L3, B_R3
 static const char *btn_names[B_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
                                           "L3", "R3", "Up", "Down", "Left", "Right" };
 enum ActKind { A_NONE, A_ATTACK, A_SKILL, A_RIGHT, A_KEY, A_HOLD, A_LCLICK, A_RCLICK, A_SHIFTCLICK,
-               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME };
+               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD };
 typedef struct { BYTE kind; BYTE vk; BYTE mods; BYTE n; } Act;  /* mods: 1 shift 2 ctrl 4 alt */
 enum Ctx { C_GAME, C_LAYER, C_PLUS, C_PANEL, C_MENU, C_COUNT };
 static const char *ctx_names[C_COUNT] = { "Jogo", "Jogo.ZL", "Jogo.Mais", "Painel", "Menu" };
@@ -94,7 +94,7 @@ static struct {
     int nav_step, nav_delay, nav_rate;
     int panel_shift;
     int skill_delay_ms;
-    int autojoin, autowalk;
+    int autojoin, autowalk, autocreate;
     float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
     int start_gold;
 } cfg;
@@ -236,11 +236,13 @@ static const char *default_ini =
 "B=KEY:ESC\n"
 "X=KEY:ENTER\n"
 "Plus=KEY:ENTER\n"
-"Minus=KEY:ESC\n"
+"; - nao manda ESC: - + R3 e o atalho do teclado do Autorun, e o ESC saia da tela de nome/fechava o jogo\n"
+"Minus=KEYBOARD\n"
 "L=KEY:SHIFT\n"
 "R=KEY:TAB\n"
-"L3=TYPENAME\n"
-"R3=TYPENAME\n"
+"; teclado do console na tela (digitar o nome do personagem)\n"
+"L3=KEYBOARD\n"
+"R3=KEYBOARD\n"
 "Up=KEY:UP\n"
 "Down=KEY:DOWN\n"
 "Left=KEY:LEFT\n"
@@ -290,6 +292,7 @@ static Act parse_act(const char *v)
     else if (!lstrcmpiA(buf, "POPUP_R")) a.kind = A_POPUP_R;
     else if (!lstrcmpiA(buf, "POPUP_L")) a.kind = A_POPUP_L;
     else if (!lstrcmpiA(buf, "TYPENAME")) a.kind = A_TYPENAME;
+    else if (!lstrcmpiA(buf, "KEYBOARD")) a.kind = A_KEYBOARD;
     else if (!strncasecmp(buf, "KEY:", 4) || !strncasecmp(buf, "HOLD:", 5)) {
         char *k = buf + (buf[0] == 'K' || buf[0] == 'k' ? 4 : 5);
         a.kind = (buf[0] == 'K' || buf[0] == 'k') ? A_KEY : A_HOLD;
@@ -357,7 +360,10 @@ static void load_config(void)
     cfg.panel_shift = ini_int("Cursor", "DeslocamentoPainel", 0);
     cfg.autojoin = ini_int("AutoTest", "AutoJoin", 0);
     cfg.autowalk = ini_int("AutoTest", "AutoWalk", 0);
-    if (cfg.autojoin || cfg.autowalk) lg("AutoTest ativo: autojoin=%d autowalk=%d", cfg.autojoin, cfg.autowalk);
+    cfg.autocreate = ini_int("AutoTest", "AutoCreate", 0);
+    if (cfg.autocreate) cfg.autojoin = 0;   /* AutoCreate faz o proprio caminho pelos menus */
+    if (cfg.autojoin || cfg.autowalk || cfg.autocreate)
+        lg("AutoTest ativo: autojoin=%d autowalk=%d autocreate=%d", cfg.autojoin, cfg.autowalk, cfg.autocreate);
     cfg.xp_multiplier = ini_float("Gameplay", "MultiplicadorXP", 2.0f);
     cfg.rune_multiplier = ini_float("Gameplay", "MultiplicadorRunas", 2.0f);
     cfg.unique_multiplier = ini_float("Gameplay", "MultiplicadorUnicos", 1.5f);
@@ -419,6 +425,31 @@ static void load_xinput(void)
 
 static float stick(SHORT v, int invert) { float f = v / 32767.0f; f = clampf(f, -1, 1); return invert ? -f : f; }
 
+/* Teclado flutuante do Autorun: enquanto aberto, o XInput chega zerado; quando fecha (o - fecha),
+ * os botoes ainda apertados aparecem como apertos novos. Esses ficam travados ate o jogador
+ * solta-los, para o - que fechou o teclado nao virar acao no jogo. O mesmo vale para - + R3,
+ * o atalho do proprio Autorun que abre o teclado. */
+static int g_osk_wait;
+static int g_latched[B_COUNT];
+
+static void latch_all_down(void)
+{
+    int i;
+    for (i = 0; i < B_COUNT; i++) if (g_pad.down[i]) g_latched[i] = 1;
+}
+
+static void pad_latch(void)
+{
+    int i, any = 0;
+    for (i = 0; i < B_COUNT; i++) any |= g_pad.down[i];
+    if (g_osk_wait && any) { latch_all_down(); g_osk_wait = 0; }
+    if (g_pad.down[B_MINUS] && g_pad.down[B_R3]) latch_all_down();
+    for (i = 0; i < B_COUNT; i++) {
+        if (!g_latched[i]) continue;
+        if (g_pad.down[i]) g_pad.down[i] = 0; else g_latched[i] = 0;
+    }
+}
+
 static void poll_pad(void)
 {
     XState st;
@@ -456,6 +487,7 @@ static void poll_pad(void)
             break;
         }
     }
+    pad_latch();
     for (i = 0; i < B_COUNT; i++) if (g_pad.down[i] && !g_prev.down[i]) g_press_time[i] = GetTickCount();
 }
 #define PRESSED(b) (g_pad.down[b] && !g_prev.down[b])
@@ -528,6 +560,24 @@ static void type_string(const char *s)
             tap_key(vk, shift ? 1 : 0);
             Sleep(40);
         }
+    }
+}
+
+/* Texto como o teclado do Autorun entrega: SendInput com KEYEVENTF_UNICODE (vira WM_CHAR).
+ * Antes, traz a janela do jogo para o foco, que e para onde o Wine manda o teclado. */
+static void type_unicode(const char *s)
+{
+    if (g_hwnd) SetForegroundWindow(g_hwnd);
+    while (*s) {
+        INPUT in[2];
+        memset(in, 0, sizeof(in));
+        in[0].type = in[1].type = INPUT_KEYBOARD;
+        in[0].ki.wScan = in[1].ki.wScan = (WORD)(unsigned char)*s++;
+        in[0].ki.dwFlags = KEYEVENTF_UNICODE;
+        in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        UINT n = SendInput(2, in, sizeof(INPUT));
+        if (n != 2) lg("SendInput unicode: %u de 2 (erro %lu)", n, GetLastError());
+        Sleep(60);
     }
 }
 
@@ -1163,6 +1213,40 @@ static void end_attack(Hold *h)
     if (g_mode == M_GAME) park_cursor();
 }
 
+/* Abre o teclado flutuante do Autorun (Wine-NX), o mesmo do atalho - + R3. O texto digitado
+ * chega ao jogo como WM_CHAR, que e o que a caixa de nome do D2 le. O codigo 30 de
+ * NtUserCallHwndParam (ShowSoftwareKeyboard) so existe no win32u do Autorun, por isso a chamada
+ * so e feita quando o ntdll exporta os simbolos do Wine-NX; fora dele cai no nome fixo. */
+#define NX_CALLHWNDPARAM_SHOWSOFTWAREKEYBOARD 30
+static int is_wine_nx(void)
+{
+    static int known = -1;
+    if (known < 0) {
+        HMODULE nt = GetModuleHandleA("ntdll.dll");
+        known = nt && (GetProcAddress(nt, "wine_nx_pe_teb") || GetProcAddress(nt, "wine_nx_user_shared_data"));
+        lg("Wine-NX %s", known ? "detectado (teclado do console disponivel)" : "nao detectado");
+    }
+    return known;
+}
+
+static void open_keyboard(void)
+{
+    typedef ULONG_PTR (WINAPI *CallHwndParam)(HWND, DWORD_PTR, DWORD);
+    static CallHwndParam call;
+    if (!g_hwnd) return;
+    if (!is_wine_nx()) { type_string("Switch"); return; }
+    if (!call) {
+        HMODULE w = GetModuleHandleA("win32u.dll");
+        if (!w) w = LoadLibraryA("win32u.dll");
+        if (w) call = (CallHwndParam)GetProcAddress(w, "NtUserCallHwndParam");
+    }
+    if (!call) { lg("teclado: NtUserCallHwndParam indisponivel"); type_string("Switch"); return; }
+    release_all();
+    ULONG_PTR ok = call(g_hwnd, 0, NX_CALLHWNDPARAM_SHOWSOFTWAREKEYBOARD);
+    lg("teclado do console: %s", ok ? "aberto" : "falhou");
+    if (ok) g_osk_wait = 1;
+}
+
 static void start_action(int b, Act a)
 {
     Hold *h = &g_hold[b];
@@ -1188,6 +1272,7 @@ static void start_action(int b, Act a)
     case A_POPUP_L: do_popup(0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
     case A_TYPENAME: type_string("Switch"); h->active = 0; break;
+    case A_KEYBOARD: open_keyboard(); h->active = 0; break;
     default: h->active = 0; break;
     }
 }
@@ -1565,48 +1650,6 @@ static void patch_treasureclass_file(const char *in_path, const char *out_path, 
     free(buf);
 }
 
-static void patch_charstats_file(const char *in_path, const char *out_path, int gold)
-{
-    FILE *fin = fopen(in_path, "rb");
-    if (!fin) {
-        fin = fopen(out_path, "rb");
-        if (!fin) return;
-    }
-    fseek(fin, 0, SEEK_END);
-    long sz = ftell(fin);
-    fseek(fin, 0, SEEK_SET);
-    BYTE *buf = (BYTE *)malloc(sz);
-    if (!buf) { fclose(fin); return; }
-    fread(buf, 1, sz, fin);
-    fclose(fin);
-
-    if (sz >= 4) {
-        DWORD classes = *(DWORD *)buf;
-        DWORD row_len = 196;
-        DWORD c, pos;
-        for (c = 0; c < classes; c++) {
-            DWORD off = 4 + c * row_len;
-            if (off + row_len > (DWORD)sz) break;
-            for (pos = off; pos + 4 <= off + row_len; pos++) {
-                if (memcmp(buf + pos, "box ", 4) == 0) {
-                    DWORD item_start = pos - 8;
-                    DWORD slot9_pos = item_start + 8 * 8;
-                    if (slot9_pos + 8 <= (DWORD)sz) {
-                        memcpy(buf + slot9_pos, "gld ", 4);
-                        WORD gld_val = gold > 10000 ? 10000 : (WORD)gold;
-                        *(WORD *)(buf + slot9_pos + 4) = 0;
-                        *(WORD *)(buf + slot9_pos + 6) = gld_val;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    FILE *fout = fopen(out_path, "wb");
-    if (fout) { fwrite(buf, 1, sz, fout); fclose(fout); }
-    free(buf);
-}
-
 static void apply_and_save_gameplay_menu(void)
 {
     char tmp[64];
@@ -1655,10 +1698,12 @@ static void apply_and_save_gameplay_menu(void)
     snprintf(o_tc, sizeof(o_tc), "%streasureclassex.bin", excel_dir);
     patch_treasureclass_file(t_tc, o_tc, cfg.rune_multiplier);
 
-    char t_cs[MAX_PATH], o_cs[MAX_PATH];
-    snprintf(t_cs, sizeof(t_cs), "%stemplates\\charstats.bin", g_dir);
+    /* charstats.bin NAO e gerado: colocar "gld " no kit inicial cria um item invalido e o Median XL
+     * recusa o personagem novo ("Generic bad character file"). Apaga copias de versoes anteriores
+     * para o jogo voltar a usar a tabela original do MPQ. */
+    char o_cs[MAX_PATH];
     snprintf(o_cs, sizeof(o_cs), "%scharstats.bin", excel_dir);
-    patch_charstats_file(t_cs, o_cs, cfg.start_gold);
+    if (DeleteFileA(o_cs)) lg("[GameplayMenu] charstats.bin antigo removido (ouro inicial desativado)");
 
     lg("[GameplayMenu] Salvo e aplicado com sucesso! XP=%.1fx, Runas=%.1fx, Unicos=%.2fx, Raros=%.2fx, Ouro=%d",
        cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
@@ -1694,11 +1739,8 @@ static void d2_render_gameplay_menu(void)
                g_rare_opts[g_gp_menu.rare_idx]);
     d2_print_string(line, 0);
 
-    _snwprintf(line, sizeof(line)/sizeof(line[0]),
-               g_gp_menu.cur_item == 4 ? L"\xFFc2> Ouro Inicial Lv1:  [\xFFc8 %d \xFFc2]  \xFFc5(0-100k)"
-                                       : L"\xFFc0  Ouro Inicial Lv1:  [\xFFc4 %d \xFFc0]",
-               g_gold_opts[g_gp_menu.gold_idx]);
-    d2_print_string(line, 0);
+    d2_print_string(g_gp_menu.cur_item == 4 ? L"\xFFc2> Ouro Inicial Lv1:  \xFFc1indisponivel no Median XL"
+                                            : L"\xFFc0  Ouro Inicial Lv1:  \xFFc1indisponivel", 0);
 
     if (g_gp_menu.cur_item == 5)
         d2_print_string(L"\xFFc2>>> [ SALVAR E APLICAR ] <<<", 2);
@@ -1740,6 +1782,133 @@ static HWND find_game_window(void)
     return w;
 }
 
+/* AutoTest: cria um personagem novo, entra, salva e sai, e carrega de novo.
+ * sx,sy = ponto como aparece na tela 1280x720. Nos menus o D2GL desenha os 800x600 esticados
+ * para 16:9, mas converte o mouse como se o jogo ocupasse 960x720 centralizado (4:3): o ponto
+ * de janela que acerta o alvo e x = 160 + 0.75*sx. So para o teste; desligado por padrao. */
+static void autocreate_click(float sx, float sy)
+{
+    int i;
+    float cx = g_player ? sx : 160.0f + 0.75f * sx;
+    move_cursor(cx * (float)g_resx / 1280.0f, sy * (float)g_resy / 720.0f);
+    /* como o botao A: aperta, segura e solta. No emulador um clique isolado as vezes nao e
+     * aceito pelo menu; dois cliques no mesmo ponto passaram de forma consistente. */
+    for (i = 0; i < 2; i++) {
+        Sleep(250);
+        send_button(0, 1);
+        Sleep(150);
+        send_button(0, 0);
+    }
+}
+
+/* Print Screen do proprio jogo: deixa um screenshot no SD para conferir cada passo */
+static void autocreate_shot(const char *what)
+{
+    lg("[AutoCreate] screenshot: %s", what);
+    tap_key(VK_SNAPSHOT, 0);
+    Sleep(300);
+}
+
+static void autocreate_tick(int mode)
+{
+    static DWORD t0;
+    static int stage;
+    DWORD now = GetTickCount();
+    if (!t0) t0 = now;
+    switch (stage) {
+    case 0:   /* menu principal */
+        if (mode == M_MENU && now - t0 >= 8000) {
+            lg("[AutoCreate] menu principal: Single Player");
+            autocreate_click(640, 523);
+            stage = 1; t0 = now;
+        }
+        break;
+    case 1:   /* selecao de personagem (no emulador a lista demora a carregar) */
+        if (now - t0 >= 20000) {
+            /* sem personagens o jogo abre direto na selecao de classe (AutoCreate=1);
+             * AutoCreate=2 = ja existem personagens, clicar em Create New */
+            autocreate_shot("apos Single Player");
+            if (cfg.autocreate == 2) {
+                lg("[AutoCreate] selecao: Create New Character");
+                autocreate_click(148, 478);
+            }
+            stage = 2; t0 = now;
+        }
+        break;
+    case 2:   /* selecao de classe */
+        if (now - t0 >= 10000) {
+            autocreate_shot("selecao de classe");
+            lg("[AutoCreate] classe: Amazon");
+            autocreate_click(195, 440);
+            stage = 3; t0 = now;
+        }
+        break;
+    case 3:   /* nome + Enter */
+        if (now - t0 >= 6000) {
+            lg("[AutoCreate] digitando nome 'Teste' e Enter");
+            autocreate_shot("classe escolhida");
+            open_keyboard();   /* o mesmo que o R3 faz na tela de nome */
+            Sleep(1500);
+            type_unicode("Teste");
+            Sleep(300);
+            autocreate_shot("nome digitado");
+            if (g_hwnd) SetForegroundWindow(g_hwnd);
+            send_key(VK_RETURN, 1); Sleep(60); send_key(VK_RETURN, 0);
+            stage = 4; t0 = now;
+        }
+        break;
+    case 4:   /* esperando entrar no jogo */
+        if (mode == M_GAME) {
+            lg("[AutoCreate] SUCESSO 1/2: personagem novo entrou no jogo (player %08lX pos %.1f,%.1f)",
+               g_player, g_px, g_py);
+            stage = 5; t0 = now;
+        } else if (now - t0 >= 45000) {
+            autocreate_shot("falha ao entrar");
+            lg("[AutoCreate] FALHA: personagem novo nao entrou no jogo em 45 s");
+            stage = 99;
+        }
+        break;
+    case 5:   /* salvar e sair */
+        if (now - t0 >= 8000) {
+            lg("[AutoCreate] ESC -> Save and Exit (res %dx%d)", g_resx, g_resy);
+            tap_key(VK_ESCAPE, 0);
+            Sleep(800);
+            autocreate_click(648, 340);
+            stage = 6; t0 = now;
+        }
+        break;
+    case 6:   /* de volta ao menu: carregar de novo */
+        if (mode == M_MENU && now - t0 >= 8000) {
+            lg("[AutoCreate] menu principal: Single Player para recarregar");
+            autocreate_click(640, 523);
+            stage = 7; t0 = now;
+        } else if (mode == M_GAME && now - t0 >= 20000) {
+            lg("[AutoCreate] FALHA: Save and Exit nao voltou ao menu");
+            stage = 99;
+        }
+        break;
+    case 7:
+        if (now - t0 >= 20000) {
+            lg("[AutoCreate] selecao: OK no personagem mais recente");
+            autocreate_click(668, 545);
+            tap_key(VK_RETURN, 0);
+            stage = 8; t0 = now;
+        }
+        break;
+    case 8:
+        if (mode == M_GAME) {
+            lg("[AutoCreate] SUCESSO 2/2: personagem recarregado do save (player %08lX)", g_player);
+            stage = 99;
+        } else if (now - t0 >= 45000) {
+            lg("[AutoCreate] FALHA: personagem salvo nao carregou em 45 s");
+            stage = 99;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 static void tick(float dt)
 {
     int b, ctx, mode;
@@ -1752,7 +1921,7 @@ static void tick(float dt)
     }
     poll_pad();
     fg = GetForegroundWindow();
-    if (fg && !cfg.autojoin && !cfg.autowalk) {
+    if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate) {
         DWORD pid = 0;
         GetWindowThreadProcessId(fg, &pid);
         if (pid && pid != GetCurrentProcessId()) {
@@ -1768,7 +1937,7 @@ static void tick(float dt)
             }
         }
     }
-    if (!g_pad.connected && !cfg.autojoin && !cfg.autowalk) { if (g_mode != M_IDLE) { release_all(); g_mode = M_IDLE; } return; }
+    if (!g_pad.connected && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate) { if (g_mode != M_IDLE) { release_all(); g_mode = M_IDLE; } return; }
     if (g_nregions && GetTickCount() - g_regions_tick > 2000) { g_nregions = 0; g_regions_tick = GetTickCount(); }
     g_player = player_unit();
     read_resolution();
@@ -1890,6 +2059,7 @@ static void tick(float dt)
             s_menu_t0 = now;
         }
     }
+    if (cfg.autocreate) autocreate_tick(mode);
     if (mode == M_GAME && cfg.autojoin) {
         lg("[AutoTest] SUCESSO: Personagem entrou no jogo! player %08lX pos %.1f,%.1f lvl %d",
            g_player, g_px, g_py, g_level);
@@ -1942,22 +2112,20 @@ static void tick(float dt)
             else if (g_gp_menu.cur_item == 1 && g_gp_menu.rune_idx > 0) g_gp_menu.rune_idx--;
             else if (g_gp_menu.cur_item == 2 && g_gp_menu.unique_idx > 0) g_gp_menu.unique_idx--;
             else if (g_gp_menu.cur_item == 3 && g_gp_menu.rare_idx > 0) g_gp_menu.rare_idx--;
-            else if (g_gp_menu.cur_item == 4 && g_gp_menu.gold_idx > 0) g_gp_menu.gold_idx--;
             d2_render_gameplay_menu();
         } else if (PRESSED(B_RIGHT)) {
             if (g_gp_menu.cur_item == 0 && g_gp_menu.xp_idx < (int)XP_COUNT - 1) g_gp_menu.xp_idx++;
             else if (g_gp_menu.cur_item == 1 && g_gp_menu.rune_idx < (int)RUNE_COUNT - 1) g_gp_menu.rune_idx++;
             else if (g_gp_menu.cur_item == 2 && g_gp_menu.unique_idx < (int)UNIQUE_COUNT - 1) g_gp_menu.unique_idx++;
             else if (g_gp_menu.cur_item == 3 && g_gp_menu.rare_idx < (int)RARE_COUNT - 1) g_gp_menu.rare_idx++;
-            else if (g_gp_menu.cur_item == 4 && g_gp_menu.gold_idx < (int)GOLD_COUNT - 1) g_gp_menu.gold_idx++;
             d2_render_gameplay_menu();
         } else if (PRESSED(B_A)) {
             apply_and_save_gameplay_menu();
-            d2_print_string(L"\xFFc2[D2NX] CONFIGURACOES SALVAS E APLICADAS!", 2);
+            d2_print_string(L"\xFFc2[D2NX] CONFIGURACOES SALVAS! Valem a partir do proximo boot do jogo.", 2);
             wchar_t wbuf[160];
             _snwprintf(wbuf, sizeof(wbuf)/sizeof(wbuf[0]),
-                       L"\xFFc4XP: %.1fx | Runas: %.1fx | Unicos: %.2fx | Raros: %.2fx | Ouro: %d",
-                       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier, cfg.start_gold);
+                       L"\xFFc4XP: %.1fx | Runas: %.1fx | Unicos: %.2fx | Raros: %.2fx",
+                       cfg.xp_multiplier, cfg.rune_multiplier, cfg.unique_multiplier, cfg.rare_multiplier);
             d2_print_string(wbuf, 4);
         } else if (PRESSED(B_B)) {
             g_gp_menu.open = 0;
@@ -2119,6 +2287,45 @@ static void chain_load_self(void)
     }
 }
 
+
+/* Diagnostico do "Bad Character File": lista os saves do Median XL (%APPDATA%\MedianXL\save)
+ * com tamanho e se o cabecalho do .d2s confere (assinatura, tamanho e checksum). */
+static void log_saves(void)
+{
+    char dir[MAX_PATH], pat[MAX_PATH], path[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    int n = 0;
+    if (!GetEnvironmentVariableA("APPDATA", dir, sizeof(dir))) return;
+    lstrcatA(dir, "\\MedianXL\\save\\");
+    snprintf(pat, sizeof(pat), "%s*.d2s", dir);
+    f = FindFirstFileA(pat, &fd);
+    if (f == INVALID_HANDLE_VALUE) { lg("saves: nenhum .d2s em %s", dir); return; }
+    do {
+        unsigned char *b;
+        DWORD size = fd.nFileSizeLow, got = 0, sum = 0, i;
+        HANDLE h;
+        const char *st = "ilegivel";
+        snprintf(path, sizeof(path), "%s%s", dir, fd.cFileName);
+        h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE && size >= 16 && size < (1u << 20) && (b = malloc(size))) {
+            if (ReadFile(h, b, size, &got, NULL) && got == size) {
+                DWORD magic = *(DWORD *)b, fsize = *(DWORD *)(b + 8), chk = *(DWORD *)(b + 12);
+                b[12] = b[13] = b[14] = b[15] = 0;
+                for (i = 0; i < size; i++) sum = ((sum << 1) | (sum >> 31)) + b[i];
+                st = magic != 0xAA55AA55 ? "assinatura invalida" : fsize != size ? "tamanho no cabecalho difere"
+                   : sum != chk ? "checksum invalido" : size < 400 ? "ok, mas so cabecalho (nunca entrou no jogo)" : "ok";
+            }
+            free(b);
+        }
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        lg("save %s: %lu bytes, %s", fd.cFileName, size, st);
+        n++;
+    } while (FindNextFileA(f, &fd));
+    FindClose(f);
+    lg("saves: %d personagem(ns) em %s", n, dir);
+}
+
 static void start(void)
 {
     char *s;
@@ -2149,6 +2356,7 @@ static void start(void)
     }
     load_config();
     lg("==== D2NXPad %s (pid %lu) ====", PAD_VERSION, GetCurrentProcessId());
+    log_saves();
     if (!cfg.enabled) { lg("Desativado no INI"); return; }
     th = CreateThread(NULL, 0, worker, NULL, 0, NULL);
     if (th) CloseHandle(th);

@@ -45,3 +45,21 @@
 - **Compilação Estática:** Corrigido [`src-d2nx/build.sh`](file:///mnt/steam/Projetos/DIABLO%202%20LOD%20SWITCH%20PORT/src-d2nx/build.sh) para incluir `-static-libgcc`, eliminando dependência dinâmica de `libgcc_s_dw2-1.dll`.
 - **APIs Exportadas:** Implementadas `XInputGetState`, `XInputSetState`, `XInputEnable`, `XInputGetCapabilities`, `XInputGetBatteryInformation`, `XInputGetKeystroke` e `XInputGetAudioDeviceIds`, garantindo que tanto o `glide3x.dll` quanto o `D2NXPad.dll` inicializem sem conflitos durante os testes automatizados em contêineres Docker.
 - **Isolamento:** Este mock é restrito ao pipeline de teste PC (`build/test_game/`) e **NUNCA** é transferido para o SD Card do Nintendo Switch.
+
+### E. 23/10/2026 — teclado do console, `−` no menu e "Generic bad character file"
+- **R3/L3/− no menu = teclado do console** (`KEYBOARD`): o D2NXPad chama `NtUserCallHwndParam(hwnd, 0, 30)`
+  (ShowSoftwareKeyboard do win32u do Autorun), o mesmo teclado do atalho `− + R3`. Só é chamado quando o
+  `ntdll` exporta `wine_nx_pe_teb`/`wine_nx_user_shared_data` (Wine-NX); fora dele cai no nome fixo.
+  Motivo: nenhuma injeção de tecla do D2NXPad (PostMessage/SendInput) chega à caixa de nome no Wine-NX
+  (verificado no Ryujinx por screenshot); o teclado do Autorun entra como teclado de hardware.
+  Evidência: `[OSK] opened by the program` no log do runtime durante o teste.
+- **`Minus` no `[Menu]` não manda mais `ESC`**: `− + R3` é o atalho do teclado do Autorun e o `ESC` do `−`
+  tirava da tela de nome / fechava o jogo pelo menu principal. Botões ainda apertados quando o teclado fecha
+  (o `−` que o fecha) ficam travados até serem soltos (`pad_latch`), para não virarem ação no jogo.
+- **Ouro inicial removido**: `apply_and_save_gameplay_menu()` gravava `data/global/excel/charstats.bin` com
+  `gld ` no kit inicial — personagem novo travava/era recusado pelo Median XL. Agora o menu apaga esse arquivo
+  e o `D2Autorun` o remove no boot quando contém `gld ` (testado no PC e no Ryujinx).
+- **Diagnóstico de saves** no `d2nxpad.log`: cada `.d2s` de `%APPDATA%\MedianXL\save` com tamanho e validade
+  do cabeçalho (assinatura, tamanho, checksum).
+- **`AutoCreate=1`** (`[AutoTest]`, só teste): cria personagem novo no emulador e tira screenshots (Print Screen
+  do jogo) a cada passo; complementa o `AutoJoin`, que só carrega personagens existentes.

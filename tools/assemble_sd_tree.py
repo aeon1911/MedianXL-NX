@@ -66,12 +66,14 @@ def clean_obsolete(target_d2):
             try: os.remove(f)
             except Exception: pass
 
-    # Remover charstats.bin customizado para evitar "Bad Character File" no Median XL
-    cs_path = os.path.join(target_d2, "data/global/excel/charstats.bin")
-    if os.path.exists(cs_path):
-        log("  Removendo charstats.bin incompativel com Median XL")
-        try: os.remove(cs_path)
-        except Exception: pass
+    # Remover charstats.bin customizado (ouro inicial "gld " no kit) e o template que o menu de
+    # gameplay do D2NXPad antigo usava para regenera-lo: causa "Generic bad character file".
+    for rel in ("data/global/excel/charstats.bin", "d2nx/templates/charstats.bin"):
+        cs_path = os.path.join(target_d2, rel)
+        if os.path.exists(cs_path):
+            log(f"  Removendo {rel} (incompativel com Median XL)")
+            try: os.remove(cs_path)
+            except Exception: pass
 
     # Remover MPQs delta legados do Median XL quando unificado estiver presente
     for f in glob.glob(os.path.join(target_d2, "medianxl-*.mpq")):

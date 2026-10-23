@@ -62,7 +62,7 @@ Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6
 
 1. No Nintendo Switch, abra o **Homebrew Menu** (segure `R` em qualquer jogo da tela inicial).
 2. Na lista de aplicativos, selecione o ícone **D2 AUTORUN (Median XL Sigma)** ou **Wine-NX**.
-3. O launcher detectará automaticamente a configuração `sdmc:/switch/wine/drive_c/DiabloII/Game.exe` e iniciará o executável com as flags `-w -3dfx`.
+3. O launcher detectará automaticamente a configuração `sdmc:/switch/wine/drive_c/DiabloII/Game.exe` e iniciará o executável com as flags `-3dfx -direct -log`.
 4. Aguarde a inicialização da tela inicial (o `D2Autorun` calibra os ganchos do `Fog.dll` e carrega o `D2Sigma.dll` de forma síncrona e segura).
 5. O menu principal do Median XL Sigma 2.14.6 aparecerá em resolução 800x600 nativa a 60 quadros por segundo.
 
@@ -91,15 +91,28 @@ O controle do jogo foi desenvolvido pelo usuário através do **D2PAD** (`src-d2
 | **Botão Minus (-)** | Automap (`Tab`) | Alterna a exibição do mapa de navegação translúcido na tela. |
 | **Clique R-Stick (R3)** | Centralizar Cursor | Reposiciona instantaneamente o ponteiro do mouse sobre o personagem. |
 
+### Fora da partida (menu principal, seleção e criação de personagem)
+
+| Botão | Ação |
+|---|---|
+| **A** | Clique (confirmar / escolher classe) |
+| **B** | Voltar (`ESC`) |
+| **X / Plus (+)** | `Enter` (confirmar o nome e criar o personagem) |
+| **R3 ou L3** | Abre o **teclado do console** na tela para digitar o nome do personagem |
+| **Minus (−)** | Também abre o teclado (não manda mais `ESC`, que tirava da tela de nome ou fechava o jogo) |
+
+No teclado do console: direcional/analógico esquerdo navega, **A** digita a tecla, **B** apaga, **Y** espaço, **X** maiúsculas, **Plus (+)** `Enter`, **Minus (−)** fecha o teclado. O toque na tela também funciona.
+
 ---
 
 ## 5. Salvamento, Desempenho e Dicas
 
-- **Gravação de Savegames:** Seus personagens de Single Player são salvos automaticamente na pasta:
+- **Gravação de Savegames:** o Median XL Σ grava os personagens na pasta do usuário do Wine, não em `DiabloII/save`:
   ```text
-  sdmc:/switch/wine/drive_c/DiabloII/save/
+  sdmc:/switch/wine/drive_c/users/steamuser/AppData/Roaming/MedianXL/save/
   ```
-  Você pode fazer backup ou transferir personagens entre o PC e o Nintendo Switch copiando os arquivos `.d2s`.
+  Você pode fazer backup ou transferir personagens entre o PC e o Nintendo Switch copiando os arquivos `.d2s` (com `.key`, `.ma0`, `.map`). O `d2nx/d2nxpad.log` lista, a cada boot, cada save com tamanho e se o cabeçalho está íntegro.
+- **"Generic bad character file":** versões anteriores do D2NXPad gravavam `data/global/excel/charstats.bin` com ouro no kit inicial (pelo menu de gameplay in-game), e o Median XL recusa personagens criados assim. O `D2Autorun` agora apaga esse arquivo no boot e o menu não o gera mais (a opção "Ouro inicial" ficou indisponível). Personagens criados enquanto o arquivo existia podem continuar recusados: apague-os na pasta acima e crie de novo.
 - **Prevenção de Falhas do Loot Filter:** O arquivo `lootfilterconf.json` incluído na raiz vem configurado com uma lista válida `[]`. Caso decida customizar suas regras de filtro de itens, assegure-se de manter o formato JSON sintaticamente válido.
 - **Configuração de Vídeo (D2GL):** O mod está configurado com o wrapper Glide `glide3x.dll` acelerado por hardware via OpenGL, proporcionando taxas estáveis de 60 FPS com renderização suave e sem cortes de áudio.
 - **Para Sair do Jogo:** Pressione `Plus (+)` para abrir o menu do jogo, selecione **Save and Exit**, e feche o aplicativo normalmente pelo botão Home do Switch.

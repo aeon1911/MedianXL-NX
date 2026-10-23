@@ -607,6 +607,28 @@ static int core_supports_d2gl(const char *core)
 
 static int same_file(const char *a, const char *b);
 
+/* Versoes anteriores do D2NXPad gravavam data\global\excel\charstats.bin com "gld " no kit inicial
+ * (ouro inicial). O Median XL recusa o personagem criado assim ("Generic bad character file").
+ * Remove essa copia antes de o jogo carregar as tabelas, para valer a original do MPQ. */
+static void remove_bad_charstats(void)
+{
+    char path[MAX_PATH];
+    HANDLE h;
+    snprintf(path, sizeof(path), "%sdata\\global\\excel\\charstats.bin", g_root);
+    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    {
+        char buf[4096];
+        DWORD got = 0, i;
+        int bad = 0;
+        ReadFile(h, buf, sizeof(buf), &got, NULL);
+        CloseHandle(h);
+        for (i = 0; i + 4 <= got; i++) if (!memcmp(buf + i, "gld ", 4)) { bad = 1; break; }
+        if (!bad) return;
+    }
+    lg("charstats.bin com ouro inicial (gld) encontrado: %s", DeleteFileA(path) ? "removido" : "FALHA ao remover");
+}
+
 static void video_setup(void)
 {
     char mode[32], setup[MAX_PATH], glide[MAX_PATH];
@@ -1004,6 +1026,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             lg("LdrRegisterDllNotification ativo (notificacoes de modulo e pin de memoria)");
         }
 
+        if (g_is_mxl) remove_bad_charstats();
         if (g_is_d2se || g_is_mxl) video_setup();
         th = CreateThread(NULL, 2 * 1024 * 1024, worker, NULL, 0, NULL);
         if (th) CloseHandle(th);

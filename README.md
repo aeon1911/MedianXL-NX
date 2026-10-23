@@ -88,7 +88,8 @@ Por questões legais e de direitos autorais da Blizzard Entertainment, **este re
 ### 3. Como Jogar
 1. No Switch, entre no **Homebrew Menu** segurando `R` ao abrir qualquer jogo comercial (Modo *Title Override*, garantindo acesso a todos os 4 GB de RAM).
 2. Selecione **D2 AUTORUN (Median XL Sigma)**.
-3. Bom jogo! Seus saves de Single Player serão gravados automaticamente em `sdmc:/switch/wine/drive_c/DiabloII/save/`.
+3. Bom jogo! Seus saves de Single Player ficam em `sdmc:/switch/wine/drive_c/users/steamuser/AppData/Roaming/MedianXL/save/`.
+4. Na tela de nome do personagem, **R3** (ou L3 / Minus) abre o teclado do console.
 
 ---
 

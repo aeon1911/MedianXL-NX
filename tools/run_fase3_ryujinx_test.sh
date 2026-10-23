@@ -92,8 +92,8 @@ while time.time() - start < 180:
                     in_game = True
                     in_game_time = elapsed
 
-    if in_game and (elapsed - in_game_time > 15):
-        print(f"Sucesso Total: Personagem jogavel e movimentando no mundo por mais de 15 segundos!", flush=True)
+    if in_game and (elapsed - in_game_time > 30):
+        print(f"Sucesso Total: Personagem jogavel e no mundo por mais de 30 segundos!", flush=True)
         break
 
 print("Fim da janela de monitoramento.")
