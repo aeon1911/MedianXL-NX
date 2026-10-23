@@ -89,6 +89,16 @@ def deploy_game_files(target_d2):
     os.makedirs(os.path.join(target_d2, "data/local"), exist_ok=True)
     os.makedirs(os.path.join(target_d2, "save"), exist_ok=True)
 
+    # 0. Sincronizar DLLs compiladas do src-d2nx para SRC_GAME
+    src_d2nx_dir = os.path.join(BASE_DIR, "src-d2nx")
+    d2auto_built = os.path.join(src_d2nx_dir, "D2Autorun.dll")
+    d2pad_built = os.path.join(src_d2nx_dir, "D2NXPad.dll")
+    if os.path.exists(d2auto_built):
+        shutil.copy2(d2auto_built, os.path.join(SRC_GAME, "D2Autorun.dll"))
+    if os.path.exists(d2pad_built):
+        os.makedirs(os.path.join(SRC_GAME, "d2nx"), exist_ok=True)
+        shutil.copy2(d2pad_built, os.path.join(SRC_GAME, "d2nx/D2NXPad.dll"))
+
     # 1. Copiar DLLs e executavel
     critical_files = [
         "Game.exe",           # PE injetado com .d2auto
@@ -180,6 +190,10 @@ def deploy_game_files(target_d2):
 
 def configure_launcher(wine_dir):
     log(f"Configurando launcher e ponteiros em {wine_dir}...")
+    nro_src = os.path.join(BASE_DIR, "sd-card/switch/wine/wine-nx-runtime.nro")
+    nro_dst = os.path.join(wine_dir, "wine-nx-runtime.nro")
+    if os.path.exists(nro_src) and (not os.path.exists(nro_dst) or os.path.getsize(nro_dst) != os.path.getsize(nro_src)):
+        shutil.copy2(nro_src, nro_dst)
     run_next = os.path.join(wine_dir, "run-next.txt")
     with open(run_next, "w", encoding="utf-8") as f:
         f.write("sdmc:/switch/wine/drive_c/DiabloII/Game.exe\n")

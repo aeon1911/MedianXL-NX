@@ -326,33 +326,8 @@ static BOOL WINAPI my_FreeLibrary(HMODULE m)
 }
 
 /* ======================================================================================
- * 4. Fog: desativa a validacao de secao critica e protege contra overflow de pool blocks
+ * 4. Fog: desativa a validacao de secao critica
  * ==================================================================================== */
-typedef void* (__cdecl *fog_alloc_t)(size_t);
-static fog_alloc_t g_real_fog_alloc;
-static void **g_fog_heap_ptr;
-
-static void* __cdecl fog_pool_alloc_hook(size_t sz)
-{
-    void *p = g_real_fog_alloc ? g_real_fog_alloc(sz) : NULL;
-    if (p) return p;
-
-    lg("[FOG FIX] Pool blocks overflowed para %u bytes! Ativando contingencia...", (unsigned)sz);
-    if (g_fog_heap_ptr && *g_fog_heap_ptr) {
-        p = HeapAlloc((HANDLE)*g_fog_heap_ptr, HEAP_ZERO_MEMORY, sz);
-        if (p) {
-            lg("[FOG FIX] Recuperado com sucesso via HeapAlloc(FogHeap): %p", p);
-            return p;
-        }
-    }
-    p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sz);
-    if (p) {
-        lg("[FOG FIX] Recuperado com sucesso via HeapAlloc(ProcessHeap): %p", p);
-        return p;
-    }
-    return NULL;
-}
-
 static void patch_fog(HMODULE fog)
 {
     IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)((BYTE *)fog + ((IMAGE_DOS_HEADER *)fog)->e_lfanew);
@@ -391,23 +366,6 @@ static void patch_fog(HMODULE fog)
         lg("Fog.dll: validacao ja estava desativada");
     } else if (found > 1) {
         lg("Fog.dll: assinatura ambigua (%d), nada alterado", found);
-    }
-
-    /* 2. Gancho anti-overflow de pool blocks (evita Halt linha #904) */
-    BYTE *call_site = (BYTE *)fog + 0x1b195;
-    if (call_site[-5] == 0x83 && call_site[-4] == 0xC0 && call_site[-3] == 0x04 &&
-        call_site[-2] == 0x56 && call_site[-1] == 0x50 && call_site[0] == 0xE8) {
-        DWORD old;
-        BYTE *target = (BYTE *)(call_site + 5) + *(int *)(call_site + 1);
-        g_real_fog_alloc = (fog_alloc_t)target;
-        g_fog_heap_ptr = *(void ***)((BYTE *)fog + 0x490f);
-        if (VirtualProtect(call_site, 5, PAGE_EXECUTE_READWRITE, &old)) {
-            *(BYTE *)call_site = 0xE8;
-            *(int *)(call_site + 1) = (BYTE *)fog_pool_alloc_hook - (call_site + 5);
-            VirtualProtect(call_site, 5, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), call_site, 5);
-            lg("Fog.dll: gancho de contingencia de pool blocks instalado (+1B195)");
-        }
     }
 }
 

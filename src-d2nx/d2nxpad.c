@@ -471,15 +471,11 @@ static int g_resx = 800, g_resy = 600;
 /* tela = origem + jogo * escala */
 static float g_ox, g_oy, g_sx = 1, g_sy = 1;
 static DWORD g_player;
-static int g_cal_ok, g_cal_step, g_cal_wait;
-static DWORD g_cal_retry;
-static int g_cal_fail, g_cal_real;
-static RECT g_cal_rect;
-static int g_cal_resx, g_cal_resy;
-static float g_cal_g1x, g_cal_g1y;
-static POINT g_cal_s1, g_cal_s2;
+static int g_cal_ok;
 static int g_lbtn, g_rbtn;       /* botoes do mouse que NOS estamos segurando */
 static int g_key_down[256];
+static float g_curx = 400, g_cury = 300;   /* cursor que controlamos, em coordenadas do jogo */
+static int g_cursor_parked = 0;
 
 static void send_key(int vk, int down)
 {
@@ -535,30 +531,41 @@ static void type_string(const char *s)
     }
 }
 
-static void send_mouse_abs(int sx, int sy)
+static void game_to_client(float gx, float gy, int *cx, int *cy)
 {
-    SetCursorPos(sx, sy);
-    INPUT in;
-    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    if (vw <= 1) vw = GetSystemMetrics(SM_CXSCREEN);
-    if (vh <= 1) vh = GetSystemMetrics(SM_CYSCREEN);
-    memset(&in, 0, sizeof(in));
-    in.type = INPUT_MOUSE;
-    in.mi.dx = (LONG)(((sx - vx) * 65535.0 + vw / 2) / (vw - 1));
-    in.mi.dy = (LONG)(((sy - vy) * 65535.0 + vh / 2) / (vh - 1));
-    in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    SendInput(1, &in, sizeof(in));
+    gx = clampf(gx, 0, (float)g_resx - 1);
+    gy = clampf(gy, 0, (float)g_resy - 1);
+    *cx = (int)lroundf(g_ox + gx * g_sx);
+    *cy = (int)lroundf(g_oy + gy * g_sy);
 }
+
+static void client_to_screen(int cx, int cy, int *sx, int *sy)
+{
+    POINT p = { 0, 0 };
+    if (g_hwnd) ClientToScreen(g_hwnd, &p);
+    *sx = p.x + cx;
+    *sy = p.y + cy;
+}
+
 static void send_button(int right, int down)
 {
-    INPUT in;
-    memset(&in, 0, sizeof(in));
-    in.type = INPUT_MOUSE;
-    in.mi.dwFlags = right ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
-                          : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);
-    SendInput(1, &in, sizeof(in));
     if (right) g_rbtn = down; else g_lbtn = down;
+    if (g_hwnd) {
+        int cx, cy, sx, sy;
+        game_to_client(g_curx, g_cury, &cx, &cy);
+        client_to_screen(cx, cy, &sx, &sy);
+        SetCursorPos(sx, sy);
+        DWORD msg = right ? (down ? WM_RBUTTONDOWN : WM_RBUTTONUP)
+                          : (down ? WM_LBUTTONDOWN : WM_LBUTTONUP);
+        WPARAM w = 0;
+        if (down) w |= right ? MK_RBUTTON : MK_LBUTTON;
+        if (g_key_down[VK_SHIFT]) w |= MK_SHIFT;
+        if (g_key_down[VK_CONTROL]) w |= MK_CONTROL;
+        PostMessageA(g_hwnd, msg, w, MAKELPARAM(cx, cy));
+    }
+    DWORD flags = right ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
+                        : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);
+    mouse_event(flags, 0, 0, 0, 0);
 }
 
 /* posicao do mouse dentro do jogo, lida da memoria (-1 se desconhecido) */
@@ -588,161 +595,85 @@ static void read_resolution(void)
     }
 }
 
-/* mapeamento padrao: area do jogo centralizada na janela mantendo a proporcao */
+/* mapeamento: coordenadas do jogo para coordenadas de cliente da janela */
 static void fallback_mapping(void)
 {
-    RECT rc; POINT p = { 0, 0 };
-    float s, w, h;
+    RECT rc;
+    float w, h;
+    if (!g_hwnd) return;
     GetClientRect(g_hwnd, &rc);
-    ClientToScreen(g_hwnd, &p);
     w = (float)(rc.right - rc.left); h = (float)(rc.bottom - rc.top);
     if (w < 16 || h < 16) { w = (float)g_resx; h = (float)g_resy; }
     if (w >= 1200 && h >= 700 && fabsf((w / h) - (16.0f / 9.0f)) < 0.2f) {
-        /* 16:9 widescreen no Switch (ex: 1280x720) com D2GL esticado: preenche tela inteira sem offset fantasma */
+        /* 16:9 widescreen no Switch (1280x720) com D2GL stretched: preenche 100% da tela */
         g_sx = w / (float)g_resx;
         g_sy = h / (float)g_resy;
-        g_ox = (float)p.x;
-        g_oy = (float)p.y;
+        g_ox = 0.0f;
+        g_oy = 0.0f;
     } else {
-        s = w / g_resx < h / g_resy ? w / g_resx : h / g_resy;
+        float s = w / g_resx < h / g_resy ? w / g_resx : h / g_resy;
         g_sx = g_sy = s;
-        g_ox = p.x + (w - g_resx * s) / 2;
-        g_oy = p.y + (h - g_resy * s) / 2;
+        g_ox = (w - g_resx * s) / 2.0f;
+        g_oy = (h - g_resy * s) / 2.0f;
     }
-}
-
-static void game_to_screen(float gx, float gy, int *sx, int *sy)
-{
-    gx = clampf(gx, 1, g_resx - 2);
-    gy = clampf(gy, 1, g_resy - 2);
-    *sx = (int)lroundf(g_ox + gx * g_sx);
-    *sy = (int)lroundf(g_oy + gy * g_sy);
 }
 
 enum { M_IDLE, M_MENU, M_PANEL, M_GAME };
 static int g_mode = M_IDLE;
 
-static float g_curx = 400, g_cury = 300;   /* cursor que controlamos, em coordenadas do jogo */
-static POINT g_last_set = { -1, -1 };
-static int g_cursor_parked = 0;
-/* o mouse tambem pode ser movido pela tela de toque do AUTORUN: segue a posicao real */
 static void sync_cursor(void)
 {
-    POINT p;
-    if (!GetCursorPos(&p) || g_sx <= 0 || g_sy <= 0) return;
-    if (abs(p.x - g_last_set.x) > 2 || abs(p.y - g_last_set.y) > 2) {
-        g_curx = clampf((p.x - g_ox) / g_sx, 1, g_resx - 2);
-        g_cury = clampf((p.y - g_oy) / g_sy, 1, g_resy - 2);
-        g_last_set = p;
-    }
+    /* Desativado no Switch para evitar que GetCursorPos do Wine-NX cause salto de cursor */
 }
+
 static void move_cursor(float gx, float gy)
 {
-    int sx, sy;
+    if (!g_hwnd) return;
+    int cx, cy, sx, sy;
     g_cursor_parked = 0;
-    g_curx = clampf(gx, 1, g_resx - 2);
-    g_cury = clampf(gy, 1, g_resy - 2);
-    game_to_screen(g_curx, g_cury, &sx, &sy);
-    send_mouse_abs(sx, sy);
-    g_last_set.x = sx; g_last_set.y = sy;
+    g_curx = clampf(gx, 0, (float)g_resx - 1);
+    g_cury = clampf(gy, 0, (float)g_resy - 1);
+    game_to_client(g_curx, g_cury, &cx, &cy);
+    client_to_screen(cx, cy, &sx, &sy);
+    SetCursorPos(sx, sy);
+
+    WPARAM w = 0;
+    if (g_lbtn) w |= MK_LBUTTON;
+    if (g_rbtn) w |= MK_RBUTTON;
+    if (g_key_down[VK_SHIFT]) w |= MK_SHIFT;
+    if (g_key_down[VK_CONTROL]) w |= MK_CONTROL;
+
+    PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
+    if (g_client && g_ver && g_ver->mouse_x && g_ver->mouse_y) {
+        if (readable(g_client + g_ver->mouse_x, 4))
+            *(volatile DWORD *)(g_client + g_ver->mouse_x) = (DWORD)lroundf(g_curx);
+        if (readable(g_client + g_ver->mouse_y, 4))
+            *(volatile DWORD *)(g_client + g_ver->mouse_y) = (DWORD)lroundf(g_cury);
+    }
 }
 
 static void park_cursor(void)
 {
     if (!g_hwnd || g_cursor_parked) return;
-    int off_x = g_resx + 100;
-    int off_y = g_resy + 100;
-    PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM((WORD)(SHORT)off_x, (WORD)(SHORT)off_y));
+    int park_x = 2000;
+    int park_y = 2000;
+    int sx, sy;
+    client_to_screen(park_x, park_y, &sx, &sy);
+    SetCursorPos(sx, sy);
+    PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(park_x, park_y));
     if (g_client && g_ver && g_ver->mouse_x && g_ver->mouse_y) {
         if (readable(g_client + g_ver->mouse_x, 4))
-            *(volatile DWORD *)(g_client + g_ver->mouse_x) = (DWORD)off_x;
+            *(volatile DWORD *)(g_client + g_ver->mouse_x) = (DWORD)park_x;
         if (readable(g_client + g_ver->mouse_y, 4))
-            *(volatile DWORD *)(g_client + g_ver->mouse_y) = (DWORD)off_y;
+            *(volatile DWORD *)(g_client + g_ver->mouse_y) = (DWORD)park_y;
     }
     g_cursor_parked = 1;
 }
 
-/* Calibracao: move o mouse do sistema para dois pontos da janela e le onde o jogo o viu.
- * Funciona com qualquer wrapper (D2GL, Glide/Sven, DirectDraw do Wine, resolucoes do
- * SGD2FreeRes) porque nao depende de como a imagem e escalada. Maquina de estados por tick. */
 static void calibrate_tick(void)
 {
-    RECT rc; POINT p = { 0, 0 };
-    int gx, gy;
-    GetClientRect(g_hwnd, &rc);
-    ClientToScreen(g_hwnd, &p);
-    OffsetRect(&rc, p.x, p.y);
-    {
-        static int had_player;
-        if (!!g_player != had_player) {      /* entrou/saiu da partida: as variaveis do mouse mudam */
-            had_player = !!g_player;
-            if (had_player && !g_cal_real) { g_cal_ok = 0; g_cal_fail = 0; g_cal_step = 0; }
-        }
-    }
-    {   /* dentro da partida sem calibracao real: tenta de novo a cada 8 s */
-        static DWORD last_try;
-        if (g_cal_ok && !g_cal_real && g_player && g_ver && (g_ver->mouse_x || g_ver->f_mouse_x) &&
-            GetTickCount() - last_try > 8000 && !g_lbtn && !g_rbtn &&
-            fabsf(g_pad.lx) < 0.2f && fabsf(g_pad.ly) < 0.2f && fabsf(g_pad.rx) < 0.2f && fabsf(g_pad.ry) < 0.2f) {
-            last_try = GetTickCount();
-            g_cal_ok = 0; g_cal_fail = 2; g_cal_step = 0;
-        }
-    }
-    if (g_cal_ok && EqualRect(&rc, &g_cal_rect) && g_cal_resx == g_resx && g_cal_resy == g_resy) return;
-    if (!g_player || !g_ver || (!g_ver->mouse_x && !g_ver->f_mouse_x)) {
-        fallback_mapping();
-        g_cal_ok = 1; g_cal_rect = rc; g_cal_resx = g_resx; g_cal_resy = g_resy;
-        return;
-    }
-    if (g_cal_wait > 0) { g_cal_wait--; return; }
-    if (g_cal_retry && (int)(GetTickCount() - g_cal_retry) < 0) return;
-    g_cal_retry = 0;
-    switch (g_cal_step) {
-    case 0:
-        fallback_mapping();
-        g_cal_s1.x = rc.left + (rc.right - rc.left) * 3 / 10;
-        g_cal_s1.y = rc.top + (rc.bottom - rc.top) * 3 / 10;
-        send_mouse_abs(g_cal_s1.x, g_cal_s1.y);
-        g_cal_step = 1; g_cal_wait = 10;
-        break;
-    case 1:
-        if (!game_mouse(&gx, &gy)) { g_cal_step = 0; g_cal_ok = 1; g_cal_rect = rc; return; }
-        g_cal_g1x = (float)gx; g_cal_g1y = (float)gy;
-        g_cal_s2.x = rc.left + (rc.right - rc.left) * 7 / 10;
-        g_cal_s2.y = rc.top + (rc.bottom - rc.top) * 7 / 10;
-        send_mouse_abs(g_cal_s2.x, g_cal_s2.y);
-        g_cal_step = 2; g_cal_wait = 10;
-        break;
-    case 2: {
-        float sx, sy;
-        game_mouse(&gx, &gy);
-        g_cal_step = 0;
-        if (fabsf(gx - g_cal_g1x) < 20 || fabsf(gy - g_cal_g1y) < 20) {
-            static int warned;
-            if (!g_player) { g_cal_fail = 4; }   /* menus: variaveis do mouse nao existem */
-            if (!warned++) lg("Calibracao sem resposta (%.0f,%.0f -> %d,%d): tentando de novo", g_cal_g1x, g_cal_g1y, gx, gy);
-            fallback_mapping();
-            g_cal_retry = GetTickCount() + 1500;
-            if (++g_cal_fail < 4) return;
-            lg("Calibracao: usando proporcao da janela");
-        } else {
-            sx = (g_cal_s2.x - g_cal_s1.x) / (gx - g_cal_g1x);
-            sy = (g_cal_s2.y - g_cal_s1.y) / (gy - g_cal_g1y);
-            if (sx < 0.2f || sx > 8 || sy < 0.2f || sy > 8) {
-                lg("Calibracao invalida (%.3f x %.3f)", sx, sy);
-                fallback_mapping();
-            } else {
-                g_sx = sx; g_sy = sy; g_cal_real = 1;
-                g_ox = g_cal_s1.x - g_cal_g1x * sx;
-                g_oy = g_cal_s1.y - g_cal_g1y * sy;
-                lg("Calibrado: janela %ldx%ld, jogo %dx%d, escala %.3f x %.3f, origem %.1f,%.1f",
-                   rc.right - rc.left, rc.bottom - rc.top, g_resx, g_resy, g_sx, g_sy, g_ox, g_oy);
-            }
-        }
-        g_cal_ok = 1; g_cal_rect = rc; g_cal_resx = g_resx; g_cal_resy = g_resy;
-        if (g_mode == M_GAME) park_cursor(); else move_cursor(g_curx, g_cury);
-        break; }
-    }
+    fallback_mapping();
+    g_cal_ok = 1;
 }
 
 /* ======================================================================================
@@ -1141,34 +1072,24 @@ static void walk_point(float dx, float dy, float *gx, float *gy)
 
 static void click(int right, int mods)
 {
-    int sx = 0, sy = 0, cx = 0, cy = 0;
-    POINT p = { 0, 0 };
-    /* os menus do D2 so aceitam o clique depois de um WM_MOUSEMOVE sobre o botao */
-    if (g_cal_ok) { move_cursor(g_curx, g_cury); Sleep(16); }
-    game_to_screen(g_curx, g_cury, &sx, &sy);
+    if (!g_hwnd) return;
+    int cx, cy, sx, sy;
+    game_to_client(g_curx, g_cury, &cx, &cy);
+    client_to_screen(cx, cy, &sx, &sy);
     SetCursorPos(sx, sy);
-    if (g_hwnd) {
-        ClientToScreen(g_hwnd, &p);
-        cx = sx - p.x;
-        cy = sy - p.y;
-    } else {
-        cx = sx; cy = sy;
-    }
+    DWORD md = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
+    DWORD mu = right ? WM_RBUTTONUP : WM_LBUTTONUP;
+    WPARAM w = right ? MK_RBUTTON : MK_LBUTTON;
+    if (mods & 1) w |= MK_SHIFT;
+    if (mods & 2) w |= MK_CONTROL;
+
     key_mods(mods, 1);
-    send_button(right, 1);
-    if (g_hwnd) {
-        DWORD md = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
-        WPARAM w = right ? MK_RBUTTON : MK_LBUTTON;
-        PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(cx, cy));
-        PostMessageA(g_hwnd, md, w, MAKELPARAM(cx, cy));
-    }
-    Sleep(80);
-    send_button(right, 0);
-    if (g_hwnd) {
-        DWORD mu = right ? WM_RBUTTONUP : WM_LBUTTONUP;
-        PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(cx, cy));
-        PostMessageA(g_hwnd, mu, 0, MAKELPARAM(cx, cy));
-    }
+    PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
+    PostMessageA(g_hwnd, md, w, MAKELPARAM(cx, cy));
+    mouse_event(right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+    Sleep(35);
+    PostMessageA(g_hwnd, mu, 0, MAKELPARAM(cx, cy));
+    mouse_event(right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
     key_mods(mods, 0);
 }
 
@@ -1213,7 +1134,6 @@ static void begin_attack(Hold *h, int right)
         if (cfg.stand_attack) h->shift = 1;
     }
     move_cursor(gx, gy);
-    Sleep(12);
     if (h->stage == 2) {                 /* interagir: um clique, repete enquanto segurar */
         click(0, 0);
         h->last = GetTickCount();
@@ -1233,7 +1153,6 @@ static void continue_attack(Hold *h)
             Target t = find_target(1, 1);
             if (t.kind != T_NONE) {
                 move_cursor(t.gx, t.gy);
-                Sleep(10);
                 click(0, 0);
                 if (g_mode == M_GAME) park_cursor();
             }
@@ -1251,7 +1170,6 @@ static void continue_attack(Hold *h)
             if (t.kind == T_HOSTILE) { h->unit = t.unit; move_cursor(t.gx, t.gy); }
             else { h->unit = 0; forward_point((float)cfg.ranged_distance, &gx, &gy); move_cursor(gx, gy);
                    if (cfg.stand_attack) { h->shift = 1; send_key(VK_SHIFT, 1); } }
-            Sleep(10);
             send_button(h->right, 1);
             h->last = now;
         }
@@ -1262,7 +1180,6 @@ static void continue_attack(Hold *h)
             if (h->shift) { send_key(VK_SHIFT, 0); h->shift = 0; }
             h->unit = t.unit;
             move_cursor(t.gx, t.gy);
-            Sleep(10);
             send_button(h->right, 1);
         } else {
             forward_point((float)cfg.ranged_distance, &gx, &gy);
@@ -2132,7 +2049,7 @@ static void tick(float dt)
             walk_point(g_pad.lx / m, g_pad.ly / m, &gx, &gy);
             move_cursor(gx, gy);
             if (!g_walking) {
-                Sleep(8); send_button(0, 1); g_walking = 1; g_walk_t0 = GetTickCount();
+                send_button(0, 1); g_walking = 1; g_walk_t0 = GetTickCount();
                 g_walk_px = g_px; g_walk_py = g_py; g_walk_kicks = 0;
             } else { enforce_run(); walk_watchdog(); }
         } else if (g_walking) {
