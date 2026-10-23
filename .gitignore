@@ -102,3 +102,28 @@ src-d2nx/*.dll
 src-d2nx/tests/*.dll
 tools/merge_mpqs
 tools/update_gameplay_tables
+
+# Arquivos do Median XL / D2GL e derivados (baixados e gerados por setup.sh, nunca versionados)
+D2Sigma.dll
+Fog.dll
+glide3x.dll
+d2fps.dll
+ddraw.dll
+*.dll.orig
+data/global/excel/
+sd-card/**/d2nx/templates/
+sd-card/**/data/global/
+# DLLs deste projeto sao compiladas pelo setup.sh (src-d2nx/build.sh)
+sd-card/**/D2Autorun.dll
+sd-card/**/D2NXPad.dll
+# Saves de personagem
+*.d2s
+*.d2x
+*.ma0
+*.ma1
+*.ma2
+*.ma3
+*.map
+_sharedstash*
+# Evidencias antigas com imagens do jogo (fora do git)
+/docs/evidence/

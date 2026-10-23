@@ -22,6 +22,14 @@ Repositório remoto: https://github.com/aeon1911/MedianXL-NX (branch `main`). Fa
   geradas por `tools/patch_gameplay.py` a partir de originais em `build/gameplay_orig/` (usa modo `-direct`).
 
 ## Fluxo de build / teste / pacote (rodar na raiz do checkout principal)
+- Do zero (usuario final): `./setup.sh "<pasta do Diablo II>" [--zip]` → `tools/build_all.sh` (build.sh,
+  `fetch_medianxl.py` = manifesto oficial do launcher com MD5, `build_tools.sh` = StormLib fixa + `build/bin/
+  merge_mpqs`/`mpq_extract`, `prepare_game.py --d2` = monta `build/test_game`, assemble). Sem ferramentas: Docker
+  com `tools/Dockerfile`. `build/test_game.antigo` = pasta antiga (MPQ zlib quebrado), pode ser apagada.
+- **Nada da Blizzard/Median XL no git, nem no historico** (pedido do usuario em 23/10): `.gitignore` cobre
+  DLLs do jogo, MPQs, tabelas `.bin`, saves. `sd-card/` so tem runtime AUTORUN (LGPL) e configuracoes.
+- `medianxl-data.mpq` = os 56 `medianxl-*.mpq` juntos por COPIA DE BLOCOS (`tools/merge_mpqs.cpp`). Nunca
+  recomprimir: a Storm 1.13c nao le zlib (os sons viravam zlib → "The file data is corrupt" no item de ouro).
 - Compilar DLLs: `docker run --rm -v "$PWD":/w -w /w/src-d2nx d2-autorun-pe-builder:latest sh build.sh`
 - Montar SD: `python3 tools/assemble_sd_tree.py` (gera `dist/sd-card/` e `build/ryujinx-test/sdcard/`)
 - Teste Ryujinx: `./tools/run_fase3_ryujinx_test.sh` (liga AutoJoin/AutoWalk no ini de teste; janela de 180 s;
@@ -65,6 +73,8 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
   (`d2nxpad.log` lista cada save).
 
 ## Testes
+- `tools/run_item_test_ryujinx.sh`: usa o personagem de `build/fresh-test-saves` (rodar antes o fresh test),
+  `ReadTest=1` (CRC de `holy_ding.wav` pela Storm = 20ec3821) + `ItemTest=2` (clica no item de ouro em 856,496).
 - `./tools/run_fase3_ryujinx_test.sh`: regressão (AutoJoin carrega Barbaro/Reunow, `AutoWalk=40` anda 40 s
   girando a direção; exige ≥ 10 posições distintas). NUNCA aceitar "ficou no mundo" sem o herói andar.
 - Capturas da janela do Ryujinx (`xprop` + `import -window`) são a forma de ver o jogo; o Print Screen do

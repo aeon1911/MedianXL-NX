@@ -52,9 +52,8 @@ def patch_tables(target_d2_dir, ini_path=None):
     os.makedirs(orig_dir, exist_ok=True)
     def orig_table(name):
         keep = os.path.join(orig_dir, name)
-        if not os.path.exists(keep) and os.path.exists(os.path.join("/tmp", name)):
-            import shutil
-            shutil.copy2(os.path.join("/tmp", name), keep)
+        if not os.path.exists(keep):
+            sys.exit(f"[GAMEPLAY] ERRO: {keep} nao existe (extraido do Median XL pelo tools/prepare_game.py)")
         return keep
     os.makedirs(excel_dir, exist_ok=True)
 

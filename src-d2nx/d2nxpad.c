@@ -95,7 +95,7 @@ static struct {
     int nav_step, nav_delay, nav_rate;
     int panel_shift;
     int skill_delay_ms;
-    int autojoin, autowalk, autocreate, cursortest, menutest;
+    int autojoin, autowalk, autocreate, cursortest, menutest, itemtest, item_x, item_y, readtest, item_delay;
     float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
     int start_gold;
 } cfg;
@@ -376,6 +376,11 @@ static void load_config(void)
     cfg.autocreate = ini_int("AutoTest", "AutoCreate", 0);
     cfg.cursortest = ini_int("AutoTest", "CursorTest", 0);
     cfg.menutest = ini_int("AutoTest", "MenuTest", 0);
+    cfg.itemtest = ini_int("AutoTest", "ItemTest", 0);
+    cfg.readtest = ini_int("AutoTest", "ReadTest", 0);
+    cfg.item_x = ini_int("AutoTest", "ItemX", 0);
+    cfg.item_y = ini_int("AutoTest", "ItemY", 0);
+    cfg.item_delay = ini_int("AutoTest", "ItemDelay", 10000);
     if (cfg.autocreate) cfg.autojoin = 0;   /* AutoCreate faz o proprio caminho pelos menus */
     if (cfg.autojoin || cfg.autowalk || cfg.autocreate)
         lg("AutoTest ativo: autojoin=%d autowalk=%d autocreate=%d", cfg.autojoin, cfg.autowalk, cfg.autocreate);
@@ -2183,7 +2188,7 @@ static void tick(float dt)
         }
     }
     fg = GetForegroundWindow();
-    if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate) {
+    if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest) {
         DWORD pid = 0;
         GetWindowThreadProcessId(fg, &pid);
         if (pid && pid != GetCurrentProcessId()) {
@@ -2199,7 +2204,7 @@ static void tick(float dt)
             }
         }
     }
-    if (!g_pad.connected && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate) { if (g_mode != M_IDLE) { release_all(); g_mode = M_IDLE; } return; }
+    if (!g_pad.connected && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest) { if (g_mode != M_IDLE) { release_all(); g_mode = M_IDLE; } return; }
     if (g_nregions && GetTickCount() - g_regions_tick > 2000) { g_nregions = 0; g_regions_tick = GetTickCount(); }
     g_player = player_unit();
     read_resolution();
@@ -2279,6 +2284,51 @@ static void tick(float dt)
         lg("modo %d -> %d (paineis abertos:%s)", g_mode, mode, b[0] ? b : " nenhum");
     }
     set_cursor_hidden(mode == M_GAME);
+    if (cfg.readtest && g_player) {
+        /* AutoTest ReadTest=1: le DATA\GLOBAL\SFX\taunt\holy_ding.wav pela Storm do jogo (como o som do item de
+         * ouro) e registra o CRC32 (correto: 20ec3821, extraido com a StormLib no Linux) */
+        static DWORD t_in; static int done;
+        if (!t_in) t_in = GetTickCount();
+        if (!done && GetTickCount() - t_in > 8000) {
+            typedef BOOL (WINAPI *SOpen_t)(const char *, HANDLE *);
+            typedef DWORD (WINAPI *SSize_t)(HANDLE, DWORD *);
+            typedef BOOL (WINAPI *SRead_t)(HANDLE, void *, DWORD, DWORD *, void *);
+            typedef BOOL (WINAPI *SClose_t)(HANDLE);
+            HMODULE st = GetModuleHandleA("Storm.dll");
+            SOpen_t so = (SOpen_t)(void *)GetProcAddress(st, (LPCSTR)267);
+            SSize_t ss = (SSize_t)(void *)GetProcAddress(st, (LPCSTR)265);
+            SRead_t sr = (SRead_t)(void *)GetProcAddress(st, (LPCSTR)269);
+            SClose_t sc = (SClose_t)(void *)GetProcAddress(st, (LPCSTR)253);
+            HANDLE fh = 0;
+            done = 1;
+            lg("[ReadTest] lendo holy_ding.wav pela Storm do jogo");
+            if (so && so("DATA\\GLOBAL\\SFX\\taunt\\holy_ding.wav", &fh)) {
+                DWORD size = ss(fh, NULL), got = 0, i, c = 0xFFFFFFFFu;
+                BYTE *buf = malloc(size + 16);
+                BOOL r = sr(fh, buf, size, &got, NULL);
+                int k;
+                for (i = 0; i < got; i++) { c ^= buf[i]; for (k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & -(c & 1)); }
+                lg("[ReadTest] tamanho %lu lidos %lu ok %d crc %08lx (correto 20ec3821)", size, got, r, (unsigned long)~c);
+                sc(fh);
+                free(buf);
+            } else lg("[ReadTest] SFileOpenFile falhou (%lu)", GetLastError());
+        }
+    }
+    if (cfg.itemtest && g_player) {
+        /* AutoTest ItemTest=1: abre o inventario aos 10 s. ItemTest=2: tambem aponta (ItemX,ItemY) e usa o
+         * item com o botao direito aos 14 s, como o Y no inventario (painel: o cursor e a interface). */
+        static DWORD t_in; static int step;
+        DWORD now = GetTickCount();
+        if (!t_in) t_in = now;
+        if (step == 0 && now - t_in > (DWORD)cfg.item_delay) { lg("[ItemTest] abrindo inventario"); tap_key('I', 0); step = 1; }
+        else if (step == 1 && now - t_in > (DWORD)cfg.item_delay + 4000 && cfg.itemtest == 2) {
+            lg("[ItemTest] botao direito no item em %d,%d", cfg.item_x, cfg.item_y);
+            move_cursor((float)cfg.item_x, (float)cfg.item_y);
+            Sleep(300);
+            click(1, 0);
+            step = 2;
+        }
+    }
     if (cfg.cursortest && g_player) {   /* AutoTest CursorTest=1: abre o inventario aos 6 s e fecha aos 14 s */
         static DWORD t_in; static int step;
         DWORD now = GetTickCount();

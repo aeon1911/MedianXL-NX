@@ -147,3 +147,31 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
 - **Teste**: `tools/run_acceptance_ryujinx.sh` (AutoWalk=2 + MenuTest=1) avalia 17 critérios pelo log:
   17/17 no Ryujinx. Um bug no próprio log de teste (argumento faltando no `lg`) derrubou o emulador 4 vezes
   com acesso a 0x16 até ser achado — não era a camada nativa.
+
+### I. 23/10/2026 (noite) — crash ao usar o item de 1.500 de ouro e repositório sem arquivos do jogo
+- **Sintoma (console)**: Amazon nova, botão direito no item de ouro do kit inicial → o ouro entra e o jogo
+  volta para o HOME; `D2Autorun.log`: "The file data is corrupt. File: medianxl-data.mpq".
+- **Causa raiz**: o antigo `tools/merge_mpqs.cpp` relia cada arquivo dos 56 `medianxl-*.mpq` e o gravava de
+  novo com **zlib**. A `Storm.dll` do 1.13c não descomprime zlib. Os 389 sons do Median XL (WAV com
+  ADPCM+Huffman da Blizzard, máscaras 0x41/0x08) passaram a zlib; ao tocar um deles (o item toca
+  `sfx\taunt\holy_ding.wav`) a Storm falha e o jogo fecha. Os outros arquivos usavam PKWARE, que a Storm lê,
+  por isso o resto funcionava.
+- **Como foi provado**: diagnóstico novo no D2Autorun (gancho em `SFileOpenFileEx`/`SFileReadFile` da Storm:
+  guarda os últimos nomes abertos e registra a leitura que falhou; `[MedianXL] DiagnosticoStorm=0` desliga;
+  `DiagnosticoLeitura=1` registra CRC das leituras do MPQ, só para depurar) mostrou `holy_ding.wav` antes
+  do erro. As leituras do Wine-NX são exatas (139 blocos conferidos), o arquivo no SD está íntegro, e o
+  mesmo erro acontece no Wine do PC: não é emulação. `ReadTest=1` (D2NXPad) lê o som pela Storm do jogo:
+  com o MPQ antigo falha, com os originais e com o MPQ novo dá CRC `20ec3821`.
+- **Correção**: `merge_mpqs` reescrito — copia os **blocos comprimidos como estão** (sem descomprimir nem
+  recomprimir) para um MPQ formato 1 escrito à mão (tabelas de hash/blocos criptografadas com as chaves
+  padrão, `(listfile)` sem compressão). Continua um MPQ só (boot rápido no cartão). Teste:
+  `tools/run_item_test_ryujinx.sh` (ReadTest + ItemTest: usa o item no inventário) 5/5, ouro 0 → 1.500,
+  jogo vivo.
+- **Repositório**: saíram do git (e do histórico) `D2Sigma.dll`, `Fog.dll`, `glide3x.dll`, `d2gl.mpq`,
+  `d2fps.dll`, `ddraw.dll`, os `medianxl-*.mpq`, as tabelas `.bin` e as imagens antigas de `docs/evidence`.
+  Agora tudo é obtido e montado na máquina do usuário: `setup.sh` → `tools/build_all.sh` (compila as DLLs,
+  `fetch_medianxl.py` baixa do manifesto oficial com MD5, `build_tools.sh` compila StormLib/merge/extract,
+  `prepare_game.py` monta `build/test_game` com os MPQs base da instalação do usuário e aplica as correções
+  conferidas byte a byte, `assemble_sd_tree.py` monta `dist/sd-card`). A saída do `prepare_game.py` é
+  idêntica, byte a byte, à pasta validada no Ryujinx. O `assemble_sd_tree.py` não grava mais arquivos do
+  jogo em `sd-card/`.

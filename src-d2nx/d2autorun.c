@@ -169,6 +169,8 @@ static MessageBoxIndirectW_t real_MessageBoxIndirectW;
 /* So o Halt da linha #904 do Fog e falta de memoria (Applet Mode). Outros Halts tem outra causa:
  * antes todo "Halt" era rotulado como #904, o que escondeu um #1696 na criacao de personagem. */
 static void log_vm_layout(const char *tag);
+static void storm_last_opened(void);
+static void dump_mxl_reads(void);
 static void halt_diag(const char *t)
 {
     if (!t || !strstr(t, "Halt")) return;
@@ -187,6 +189,7 @@ static int WINAPI my_MessageBoxA(HWND w, LPCSTR t, LPCSTR c, UINT f)
 {
     (void)w; (void)f;
     lg("MessageBox [%s]: %s (auto-dispensado)", c ? c : "", t ? t : "");
+    if (t && !strstr(t, "Halt")) { log_vm_layout("erro"); storm_last_opened(); dump_mxl_reads(); }
     halt_diag(t);
     return IDOK;
 }
@@ -493,6 +496,189 @@ static void low_memory_hook(void)
 }
 
 /* ======================================================================================
+ * 5c. diagnostico da Storm: qual arquivo de dentro do MPQ falhou
+ * "The file data is corrupt" (erro 1392) so diz o MPQ. SFileOpenFileEx (ordinal 268) guarda o nome de cada
+ * arquivo aberto e SFileReadFile (269) registra nome e erro quando uma leitura falha. Ligado por padrao
+ * ([MedianXL] DiagnosticoStorm=0 desliga); foi o que mostrou os sons do Median XL recomprimidos em zlib.
+ * ==================================================================================== */
+typedef BOOL (WINAPI *SFileOpenFileEx_t)(HANDLE, const char *, DWORD, HANDLE *);
+typedef BOOL (WINAPI *SFileReadFile_t)(HANDLE, void *, DWORD, DWORD *, void *);
+static SFileOpenFileEx_t g_sfo_orig;
+static SFileReadFile_t g_sfr_orig;
+#define STORM_NAMES 512
+static struct { HANDLE h; char name[96]; } g_storm_names[STORM_NAMES];
+static volatile LONG g_storm_next;
+static LONG g_storm_fail;
+
+static BOOL WINAPI my_SFileOpenFileEx(HANDLE mpq, const char *name, DWORD scope, HANDLE *file)
+{
+    BOOL r = g_sfo_orig(mpq, name, scope, file);
+    if (r && file && *file && name) {
+        LONG i = InterlockedIncrement(&g_storm_next) % STORM_NAMES;
+        g_storm_names[i].h = *file;
+        lstrcpynA(g_storm_names[i].name, name, sizeof(g_storm_names[0].name));
+    }
+    return r;
+}
+static BOOL WINAPI my_SFileReadFile(HANDLE file, void *buf, DWORD len, DWORD *got, void *ov)
+{
+    BOOL r = g_sfr_orig(file, buf, len, got, ov);
+    if (!r) {
+        DWORD err = GetLastError();
+        if (err != ERROR_HANDLE_EOF && InterlockedIncrement(&g_storm_fail) <= 20) {
+            const char *n = "?";
+            int i;
+            for (i = 0; i < STORM_NAMES; i++) if (g_storm_names[i].h == file) n = g_storm_names[i].name;
+            lg("Storm: leitura falhou em '%s' (%lu bytes, lidos %lu, erro %lu)", n, len, got ? *got : 0, err);
+        }
+        SetLastError(err);
+    }
+    return r;
+}
+/* leituras do medianxl-data.mpq (deslocamento, tamanho, CRC dos dados recebidos) para comparar com o arquivo */
+typedef BOOL (WINAPI *ReadFile_t)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+typedef HANDLE (WINAPI *CreateFileA_t)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+typedef HANDLE (WINAPI *CreateFileW_t)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+static ReadFile_t g_rf_real;
+static CreateFileA_t g_cfa_real;
+static CreateFileW_t g_cfw_real;
+static int g_io_diag;   /* [MedianXL] DiagnosticoLeitura=1: CRC de cada leitura do MPQ (pesado, so para depurar) */
+static HANDLE g_mxl_handles[8];
+static struct { DWORD off, len, got, crc, ov, tid; } g_reads[64];
+static volatile LONG g_reads_n;
+static unsigned crc32b(const BYTE *p, DWORD n)
+{
+    unsigned c = 0xFFFFFFFFu; DWORD i; int k;
+    for (i = 0; i < n; i++) { c ^= p[i]; for (k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & -(c & 1)); }
+    return ~c;
+}
+static int is_mxl_handle(HANDLE h)
+{
+    int i;
+    for (i = 0; i < 8; i++) if (h && g_mxl_handles[i] == h) return 1;
+    return 0;
+}
+static void remember_mxl(HANDLE h, int named)
+{
+    int i;
+    if (h == INVALID_HANDLE_VALUE || !named) return;
+    for (i = 0; i < 8; i++) if (!g_mxl_handles[i]) { g_mxl_handles[i] = h; lg("medianxl-data.mpq aberto: handle %p", h); return; }
+}
+static HANDLE WINAPI diag_CreateFileA(LPCSTR n, DWORD a, DWORD s, LPSECURITY_ATTRIBUTES sa, DWORD c, DWORD f, HANDLE t)
+{
+    HANDLE h = g_cfa_real(n, a, s, sa, c, f, t);
+    remember_mxl(h, n && strstr(n, "medianxl-data") != NULL);
+    return h;
+}
+static HANDLE WINAPI diag_CreateFileW(LPCWSTR n, DWORD a, DWORD s, LPSECURITY_ATTRIBUTES sa, DWORD c, DWORD f, HANDLE t)
+{
+    HANDLE h = g_cfw_real(n, a, s, sa, c, f, t);
+    remember_mxl(h, n && wcsstr(n, L"medianxl-data") != NULL);
+    return h;
+}
+static BOOL WINAPI diag_ReadFile(HANDLE h, LPVOID buf, DWORD len, LPDWORD got, LPOVERLAPPED ov)
+{
+    DWORD off = 0, n;
+    BOOL r;
+    int mine = is_mxl_handle(h);
+    if (mine) off = ov ? ov->Offset : SetFilePointer(h, 0, NULL, FILE_CURRENT);
+    r = g_rf_real(h, buf, len, got, ov);
+    if (mine) {
+        LONG i = InterlockedIncrement(&g_reads_n) % 64;
+        n = got ? *got : 0;
+        g_reads[i].off = off; g_reads[i].len = len; g_reads[i].got = n; g_reads[i].ov = ov != NULL;
+        g_reads[i].crc = (r && n && buf) ? crc32b(buf, n) : 0; g_reads[i].tid = GetCurrentThreadId();
+    }
+    return r;
+}
+static int patch_iat(HMODULE m, const char *dll, const char *func, void *repl, void **orig)
+{
+    BYTE *b = (BYTE *)m;
+    IMAGE_NT_HEADERS32 *nt;
+    IMAGE_IMPORT_DESCRIPTOR *imp;
+    IMAGE_DATA_DIRECTORY *dir;
+    int done = 0;
+    if (!m) return 0;
+    nt = (IMAGE_NT_HEADERS32 *)(b + ((IMAGE_DOS_HEADER *)b)->e_lfanew);
+    dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir->VirtualAddress) return 0;
+    for (imp = (IMAGE_IMPORT_DESCRIPTOR *)(b + dir->VirtualAddress); imp->Name; imp++) {
+        IMAGE_THUNK_DATA32 *names, *iat;
+        if (!imp->OriginalFirstThunk || lstrcmpiA((char *)(b + imp->Name), dll)) continue;
+        names = (IMAGE_THUNK_DATA32 *)(b + imp->OriginalFirstThunk);
+        iat = (IMAGE_THUNK_DATA32 *)(b + imp->FirstThunk);
+        for (; names->u1.AddressOfData; names++, iat++) {
+            DWORD old;
+            if (names->u1.Ordinal & IMAGE_ORDINAL_FLAG32) continue;
+            if (strcmp((char *)((IMAGE_IMPORT_BY_NAME *)(b + names->u1.AddressOfData))->Name, func)) continue;
+            if (!*orig) *orig = (void *)iat->u1.Function;
+            if (VirtualProtect(&iat->u1.Function, 4, PAGE_READWRITE, &old)) {
+                iat->u1.Function = (DWORD)repl;
+                VirtualProtect(&iat->u1.Function, 4, old, &old);
+                done++;
+            }
+        }
+    }
+    return done;
+}
+static void io_diag_module(HMODULE m, const char *name)
+{
+    int n = patch_iat(m, "kernel32.dll", "ReadFile", (void *)diag_ReadFile, (void **)&g_rf_real);
+    n += patch_iat(m, "kernel32.dll", "CreateFileA", (void *)diag_CreateFileA, (void **)&g_cfa_real);
+    n += patch_iat(m, "kernel32.dll", "CreateFileW", (void *)diag_CreateFileW, (void **)&g_cfw_real);
+    if (n) lg("diagnostico de leitura de arquivo em %s (%d entradas)", name, n);
+}
+static void dump_mxl_reads(void)
+{
+    LONG n = g_reads_n, i;
+    for (i = n - 19; i <= n; i++)
+        if (i > 0) lg("  leitura %ld: off %lu len %lu lidos %lu crc %08lx %s tid %lu", i, g_reads[i % 64].off,
+                      g_reads[i % 64].len, g_reads[i % 64].got, (unsigned long)g_reads[i % 64].crc,
+                      g_reads[i % 64].ov ? "overlapped" : "sync", g_reads[i % 64].tid);
+}
+
+static void storm_last_opened(void)
+{
+    LONG n = g_storm_next, i;
+    if (!g_sfo_orig) return;
+    for (i = n - 7; i <= n; i++)
+        if (i > 0) lg("  Storm abriu (%ld): %s", i, g_storm_names[i % STORM_NAMES].name);
+}
+static void *storm_trampoline(BYTE *fn, int n, void *hook)
+{
+    BYTE *t = VirtualAlloc(NULL, 32, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    DWORD old;
+    if (!t) return NULL;
+    memcpy(t, fn, n);
+    t[n] = 0xE9; *(DWORD *)(t + n + 1) = (DWORD)((fn + n) - (t + n + 5));
+    VirtualProtect(t, 32, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 32);
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &old)) return NULL;
+    fn[0] = 0xE9; *(DWORD *)(fn + 1) = (DWORD)((BYTE *)hook - (fn + 5));
+    VirtualProtect(fn, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    return t;
+}
+static void storm_diag_init(void)
+{
+    HMODULE st = GetModuleHandleA("Storm.dll");
+    BYTE *o, *r;
+    if (!st) return;
+    o = (BYTE *)GetProcAddress(st, (LPCSTR)268);
+    r = (BYTE *)GetProcAddress(st, (LPCSTR)269);
+    /* mov ecx,[esp+10h] / sub esp,110h  e  mov eax,[esp+14h] / mov ecx,[esp+10h] */
+    if (o && !memcmp(o, "\x8B\x4C\x24\x10\x81\xEC\x10\x01\x00\x00", 10) &&
+        r && !memcmp(r, "\x8B\x44\x24\x14\x8B\x4C\x24\x10", 8)) {
+        g_sfo_orig = (SFileOpenFileEx_t)storm_trampoline(o, 10, (void *)my_SFileOpenFileEx);
+        g_sfr_orig = (SFileReadFile_t)storm_trampoline(r, 8, (void *)my_SFileReadFile);
+        lg("Storm: diagnostico de leitura ativo (%s)", g_sfo_orig && g_sfr_orig ? "ok" : "falhou");
+        if (g_io_diag) io_diag_module(st, "Storm.dll");
+    } else {
+        lg("Storm: bytes de SFileOpenFileEx/SFileReadFile nao conferem, diagnostico desligado");
+    }
+}
+
+/* ======================================================================================
  * 6. notificacao de carga de modulos
  * ==================================================================================== */
 typedef struct { ULONG Flags; const UNICODE_STRING *FullDllName, *BaseDllName; PVOID DllBase; ULONG SizeOfImage; } LDR_NOTIF;
@@ -523,6 +709,7 @@ static VOID CALLBACK on_dll(ULONG reason, const LDR_NOTIF *d, PVOID ctx)
         }
     }
     if (!lstrcmpiA(name, "Fog.dll")) patch_fog((HMODULE)d->DllBase);
+    if (g_io_diag && !lstrcmpiA(name, "D2Sigma.dll")) io_diag_module((HMODULE)d->DllBase, name);
     if (!lstrcmpiA(name, "D2Client.dll")) InterlockedExchange(&g_client_loaded, 1);
 }
 
@@ -661,6 +848,8 @@ static void log_vm_layout(const char *tag)
     DWORD a = 0x10000, used_lo = 0, used_hi = 0, resv_hi = 0;
     while (a < 0xFFFF0000 && VirtualQuery((void *)a, &mbi, sizeof(mbi))) {
         DWORD base = (DWORD)mbi.BaseAddress, size = (DWORD)mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_MAPPED && size >= 0x1000000)
+            lg("  mapeamento de arquivo: %08lX-%08lX (%lu MB)", base, base + size, size >> 20);
         if (mbi.State == MEM_COMMIT) {
             if (base >= 0x80000000) {
                 used_hi += size;
@@ -1105,6 +1294,10 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
         lg("Tratador de excecoes vetorado (VEH c0000005) ativo para todos os modulos");
 
         if (g_is_mxl && GetPrivateProfileIntA("MedianXL", "Memoria2GB", 1, g_cfg)) low_memory_hook();
+        if (g_is_mxl) {
+            g_io_diag = GetPrivateProfileIntA("MedianXL", "DiagnosticoLeitura", 0, g_cfg);
+            if (GetPrivateProfileIntA("MedianXL", "DiagnosticoStorm", 1, g_cfg)) storm_diag_init();
+        }
 
         void *cookie = NULL;
         LdrRegisterDllNotification_t reg = (LdrRegisterDllNotification_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "LdrRegisterDllNotification");

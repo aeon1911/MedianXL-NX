@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 tools/assemble_sd_tree.py
-Monta a arvore final do SD Card para o Nintendo Switch em:
+Monta a arvore final do SD Card a partir de build/test_game (gerada por tools/prepare_game.py) em:
   dist/sd-card/switch/wine/drive_c/DiabloII/
 e sincroniza com o ambiente de teste do Ryujinx em:
   build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/
@@ -123,7 +123,7 @@ def deploy_game_files(target_d2):
         "D2DDraw.dll", "D2Direct3D.dll", "D2Game.dll", "D2Gdi.dll", "D2gfx.dll",
         "D2Glide.dll", "D2Lang.dll", "D2Launch.dll", "D2.LNG", "D2MCPClient.dll",
         "D2Multi.dll", "D2Net.dll", "D2sound.dll", "D2Win.dll", "ijl11.dll",
-        "SmackW32.dll", "Storm.dll", "default.key"
+        "SmackW32.dll", "Storm.dll"
     ]
     for cf in critical_files:
         src = os.path.join(SRC_GAME, cf)
@@ -347,20 +347,14 @@ def main():
         configure_launcher(RYU_WINE)
         patch_wine_registry(os.path.join(RYU_WINE, "registry"))
 
-    # 3. Sincronizar em sd-card/
-    ROOT_WINE = os.path.join(ROOT_SWITCH, "wine")
-    ROOT_D2 = os.path.join(ROOT_WINE, "drive_c/DiabloII")
-    if os.path.exists(ROOT_WINE):
-        log("Sincronizando arvore sd-card/ raiz...")
-        clean_obsolete(ROOT_D2)
-        deploy_game_files(ROOT_D2)
-        configure_launcher(ROOT_WINE)
-        patch_wine_registry(os.path.join(ROOT_WINE, "registry"))
-        
-    # 4. Atualizar tabelas de gameplay (XP, Runas, Drops, Ouro) em data/global/excel/ via -direct
+    # A pasta sd-card/ do repositorio so tem o runtime e as configuracoes deste projeto: nenhum arquivo do
+    # jogo e copiado para ela (os do Diablo II e do Median XL ficam em build/ e dist/, fora do git).
+    ROOT_D2 = os.path.join(ROOT_SWITCH, "wine/drive_c/DiabloII")
+
+    # 3. Atualizar tabelas de gameplay (XP, Runas, Drops, Ouro) em data/global/excel/ via -direct
     from patch_gameplay import patch_tables
     ini_file = os.path.join(ROOT_D2, "d2nx/d2nxpad.ini")
-    for d in [DIST_D2, RYU_D2, ROOT_D2]:
+    for d in [DIST_D2, RYU_D2]:
         if os.path.exists(d):
             log(f"Aplicando modificadores de gameplay em {d}...")
             patch_tables(d, ini_file)

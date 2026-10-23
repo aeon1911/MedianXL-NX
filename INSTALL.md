@@ -1,6 +1,6 @@
 # MANUAL DE INSTALAÇÃO E USO — MEDIAN XL Σ 2.14.6 NO NINTENDO SWITCH (AUTORUN)
 
-Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6** para o Nintendo Switch rodando sobre a camada de compatibilidade **AUTORUN (Wine-NX)** no Horizon OS, com integração total de controle analógico via **D2PAD** in-process e inicialização direta sem qualquer dependência do D2SE.
+Este projeto monta o port de **Median XL Σ 2.14.6** para o Nintendo Switch rodando sobre a camada de compatibilidade **AUTORUN (Wine-NX)** no Horizon OS, com integração total de controle analógico via **D2PAD** in-process e inicialização direta sem qualquer dependência do D2SE.
 
 ---
 
@@ -14,16 +14,41 @@ Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6
 
 ---
 
-## 2. Instruções de Instalação no Cartão SD
+## 2. Gerar os arquivos do cartão SD (no PC)
 
-1. Conecte o cartão MicroSD do Nintendo Switch ao computador (via leitor de cartão ou FTP/DBI MTP Responder).
-2. Localize o arquivo de entrega final gerado pelo projeto:
-   ```text
-   dist/d2-medianxl-autorun-switch-2.14.6-final.zip
-   ```
-3. Extraia todo o conteúdo do arquivo ZIP diretamente na **raiz** do seu cartão SD (`sdmc:/`).
-4. Se solicitado para mesclar pastas existentes (`switch/`), confirme a substituição/mesclagem.
-5. Verifique se a estrutura no cartão SD ficou exatamente desta forma:
+Este repositório **não contém arquivos da Blizzard nem do Median XL** (direitos autorais). Eles são montados na
+sua máquina pelo `setup.sh`, a partir da sua instalação do Diablo II: Lord of Destruction e do download oficial
+do Median XL:
+
+```bash
+./setup.sh "/caminho/do/seu/Diablo II"          # gera dist/sd-card/
+./setup.sh "/caminho/do/seu/Diablo II" --zip    # gera também dist/d2-medianxl-autorun-switch-2.14.6-final.zip
+```
+
+- **Da sua instalação** saem só os 10 MPQs base: `d2char`, `d2data`, `d2exp`, `d2music`, `d2sfx`, `d2speech`,
+  `d2video`, `d2xmusic`, `d2xtalk`, `d2xvideo` (`.mpq`, maiúsculas ou minúsculas). Instalação do CD: copie também
+  dos discos os MPQs de música/vídeo que o instalador deixou no CD.
+- **Do Median XL** (`tools/fetch_medianxl.py`, manifesto oficial `launcher.median-xl.com`, MD5 conferido):
+  `medianxl-*.mpq`, `D2Sigma.dll`, `Fog.dll`, `Game.exe` e DLLs 1.13c, `Storm.dll`, D2GL (`glide3x.dll`,
+  `d2gl.mpq`) e `patch_d2.mpq`.
+- **Ferramentas:** `python3`, `i686-w64-mingw32-gcc`, `g++`, `cmake`, `make`, `git`, zlib e bzip2. Se faltar
+  alguma, o `setup.sh` usa o Docker (`tools/Dockerfile`).
+- **O que é alterado (na sua máquina, conferido byte a byte):** `Game.exe` ganha a seção `.d2auto` que carrega o
+  `D2Autorun.dll`; `Fog.dll` tem o bit `IMAGE_FILE_RELOCS_STRIPPED` corrigido; `D2Sigma.dll` ganha um teste de
+  ponteiro nulo em `0x1005FC77`; os 56 `medianxl-*.mpq` viram um `medianxl-data.mpq` (cópia dos blocos
+  comprimidos, sem recompressão — boot mais rápido no cartão).
+
+Os passos, um por um, estão em `tools/build_all.sh` e no `README.md`.
+
+## 3. Instalação no Cartão SD
+
+1. Conecte o cartão MicroSD ao computador (leitor de cartão ou FTP/DBI MTP Responder).
+2. Copie a pasta `dist/sd-card/switch` para a **raiz** do cartão (`sdmc:/switch`), mesclando com a `switch/`
+   existente. Se gerou o zip, extraia-o na raiz do cartão.
+3. Uma versão anterior com o `medianxl-data.mpq` antigo deve ser **substituída**: aquele MPQ tinha os sons do
+   Median XL recomprimidos em zlib e fechava o jogo ("The file data is corrupt") ao tocar alguns sons, por
+   exemplo ao usar o item de 1.500 de ouro do kit inicial.
+4. Verifique se a estrutura no cartão SD ficou exatamente desta forma:
    ```text
    sdmc:/
    └── switch/
@@ -46,7 +71,8 @@ Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6
                    ├── D2Sigma.dll
                    ├── glide3x.dll
                    ├── d2gl.ini
-                   ├── d2fps.dll
+                   ├── d2gl.mpq
+                   ├── medianxl-data.mpq
                    ├── lootfilterconf.json
                    ├── data/local/use
                    ├── d2nx/
@@ -54,11 +80,11 @@ Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6
                    │   └── d2nxpad.ini
                    └── *.mpq
    ```
-6. Ejete com segurança o cartão SD do computador e insira-o novamente no Nintendo Switch.
+5. Ejete com segurança o cartão SD do computador e insira-o novamente no Nintendo Switch.
 
 ---
 
-## 3. Como Iniciar o Jogo
+## 4. Como Iniciar o Jogo
 
 1. No Nintendo Switch, abra o **Homebrew Menu** (segure `R` em qualquer jogo da tela inicial).
 2. Na lista de aplicativos, selecione o ícone **D2 AUTORUN (Median XL Sigma)** ou **Wine-NX**.
@@ -68,7 +94,7 @@ Este pacote contém o port completo e pronto para jogar de **Median XL Σ 2.14.6
 
 ---
 
-## 4. Mapeamento de Controles do D2NXPad
+## 5. Mapeamento de Controles do D2NXPad
 
 O movimento e as ações do herói usam a **rotina de comando do próprio jogo** (camada nativa, ver `RULES.md`):
 nada de mouse, cursor ou clique simulado. Dentro do jogo o cursor fica oculto enquanto nenhum painel está aberto.
@@ -114,7 +140,7 @@ O teclado flutuante do Autorun (atalho `− + R3`) abre mas **não aparece** na 
 
 ---
 
-## 5. Salvamento, Desempenho e Dicas
+## 6. Salvamento, Desempenho e Dicas
 
 - **Gravação de Savegames:** o Median XL Σ grava os personagens na pasta do usuário do Wine, não em `DiabloII/save`:
   ```text
