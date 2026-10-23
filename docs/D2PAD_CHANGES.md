@@ -101,3 +101,23 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
 - Correções à seção E: a injeção chega, sim, à caixa de nome (só precisava de contagem 1). O `charstats.bin`
   com ouro era uma causa real no PC, mas no console a falha continuava por causa da memória alta e da
   pasta de saves.
+
+### G. 23/10/2026 (noite) — "anda dois passos e congela" e cursor visível ao andar
+- **Causa do congelamento**: um Enter que fica na fila do jogo durante o carregamento (o `+`/`X` que entra
+  no jogo) é processado segundos depois de entrar e **abre a caixa de chat**. Com o chat aberto o herói
+  não anda, e o jogo volta quando um ESC (o `+`) fecha o chat. Reproduzido no Ryujinx com capturas (chat
+  aberto e herói parado por 75 s) e com o `ui_open(UI_CHAT)` no log; sem a tecla R o chat abre do mesmo
+  jeito. Correção: o D2NXPad fecha o chat com ESC quando ele abre dentro do jogo sem um Enter pedido
+  no último 1,5 s (log "chat do jogo aberto sem pedido").
+- O `WH_GETMESSAGE` do D2NXPad nunca foi instalado no Wine-NX (`SetWindowsHookExW` retorna NULL, erro 1);
+  o log agora mostra o erro. Nada pode depender dele.
+- **Cursor oculto na partida**: o D2Client 1.13c desenha o cursor em +0x16870 (principal, imagem pelo tipo
+  de cursor) e +0x15FC0. Sem painel aberto as duas viram `ret` (bytes conferidos antes); com painel/menu
+  aberto voltam. O mouse do jogo continua sendo usado por baixo para andar e atacar, invisível. Desligando
+  só a +0x15FC0 o cursor piscava. Verificado por capturas: 40 s andando sem cursor; com o inventário
+  aberto o cursor aparece.
+- Vigia do herói parado repete o clique a cada 0,8 s enquanto o analógico estiver segurado (antes parava
+  depois de 3 tentativas).
+- Testes: `AutoWalk=N` (N > 1) anda N segundos girando a direção e registra a posição a cada segundo;
+  `run_fase3_ryujinx_test.sh` agora exige que o herói mude de posição (≥ 10 posições em 40 s) — o
+  critério antigo ("30 s no mundo") aprovava o herói parado. `CursorTest=1` abre/fecha o inventário.

@@ -94,7 +94,7 @@ static struct {
     int nav_step, nav_delay, nav_rate;
     int panel_shift;
     int skill_delay_ms;
-    int autojoin, autowalk, autocreate;
+    int autojoin, autowalk, autocreate, cursortest;
     float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
     int start_gold;
 } cfg;
@@ -364,6 +364,7 @@ static void load_config(void)
     cfg.autojoin = ini_int("AutoTest", "AutoJoin", 0);
     cfg.autowalk = ini_int("AutoTest", "AutoWalk", 0);
     cfg.autocreate = ini_int("AutoTest", "AutoCreate", 0);
+    cfg.cursortest = ini_int("AutoTest", "CursorTest", 0);
     if (cfg.autocreate) cfg.autojoin = 0;   /* AutoCreate faz o proprio caminho pelos menus */
     if (cfg.autojoin || cfg.autowalk || cfg.autocreate)
         lg("AutoTest ativo: autojoin=%d autowalk=%d autocreate=%d", cfg.autojoin, cfg.autowalk, cfg.autocreate);
@@ -555,8 +556,10 @@ static void post_back(void)
     PostMessageA(g_hwnd, WM_KEYDOWN, VK_BACK, key_lparam(VK_BACK, 0));
     PostMessageA(g_hwnd, WM_KEYUP, VK_BACK, key_lparam(VK_BACK, 1));
 }
+static DWORD g_enter_t;          /* ultimo Enter pedido (para saber se o chat foi aberto de proposito) */
 static void tap_key(int vk, int mods)
 {
+    if (vk == VK_RETURN) g_enter_t = GetTickCount();
     key_mods(mods, 1);
     send_key(vk, 1);
     if (vk >= 'A' && vk <= 'Z') post_char((mods & 1) ? vk : (vk + 32));
@@ -689,6 +692,46 @@ static void park_cursor(void)
     int park_y = 2000;
     PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(park_x, park_y));
     g_cursor_parked = 1;
+}
+
+/* Cursor oculto na partida. O D2Client 1.13c desenha o cursor em duas rotinas sem argumentos, ambas pela
+ * posicao do mouse do jogo (+0x11B828/+0x11B824) e pelo D2Gfx: +0x16870 (a principal: imagem pelo tipo de
+ * cursor em +0x11B838[tipo], quadro animado, posicao limitada a tela) e +0x15FC0 (imagem fixa de
+ * +0x11B850). Com so uma delas desligada o cursor piscava no Ryujinx. Trocando o 1o byte de cada uma por
+ * ret o cursor nao e desenhado, e o mouse do jogo continua valendo para andar/atacar. Com painel ou menu
+ * aberto os bytes originais voltam. So e aplicado se os bytes conferem (1.13c original). */
+static BYTE *g_cursor_fn[2];
+static BYTE g_cursor_orig[2];
+static int g_cursor_hidden = -1;
+static void cursor_draw_init(void)
+{
+    BYTE *a, *b;
+    if (!g_ver || strcmp(g_ver->name, "1.13c") || !g_ver->mouse_x || !g_ver->mouse_y) return;
+    a = (BYTE *)(g_client + 0x16870);   /* mov eax,[mouse_x] */
+    b = (BYTE *)(g_client + 0x15FC0);   /* sub esp,48h / mov edx,[mouse_y] */
+    if (a[0] == 0xA1 && *(DWORD *)(a + 1) == g_client + g_ver->mouse_x &&
+        b[0] == 0x83 && b[1] == 0xEC && b[2] == 0x48 && b[3] == 0x8B && b[4] == 0x15 &&
+        *(DWORD *)(b + 5) == g_client + g_ver->mouse_y) {
+        g_cursor_fn[0] = a; g_cursor_orig[0] = a[0];
+        g_cursor_fn[1] = b; g_cursor_orig[1] = b[0];
+        lg("cursor: rotinas de desenho do D2Client em %p e %p (ocultas na partida sem painel aberto)", a, b);
+    } else {
+        lg("cursor: rotinas de desenho nao conferem (%02X %02X), cursor nao sera ocultado", a[0], b[0]);
+    }
+}
+static void set_cursor_hidden(int hide)
+{
+    DWORD old;
+    int i;
+    if (!g_cursor_fn[0] || hide == g_cursor_hidden) return;
+    for (i = 0; i < 2; i++) {
+        if (!VirtualProtect(g_cursor_fn[i], 1, PAGE_EXECUTE_READWRITE, &old)) return;
+        g_cursor_fn[i][0] = hide ? 0xC3 : g_cursor_orig[i];
+        VirtualProtect(g_cursor_fn[i], 1, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_cursor_fn[i], 1);
+    }
+    dbg("cursor %s", hide ? "oculto" : "visivel");
+    g_cursor_hidden = hide;
 }
 
 static void calibrate_tick(void)
@@ -982,15 +1025,21 @@ static DWORD g_walk_t0, g_run_tap;
 static float g_walk_px, g_walk_py; static int g_walk_kicks;
 
 /* vigia: analogico segurado e o heroi parado -> solta modificadores perdidos e repete o clique */
+static DWORD g_wd_t;
 static void walk_watchdog(void)
 {
     DWORD now = GetTickCount();
     float d;
-    if (!g_player || now - g_walk_t0 < 700 || g_walk_kicks >= 3) return;
+    if (!g_player || now - g_walk_t0 < 700) return;
+    if (!g_wd_t) g_wd_t = g_walk_t0;
     d = fabsf(g_px - g_walk_px) + fabsf(g_py - g_walk_py);
-    if (d > 0.3f) { g_walk_kicks = 3; return; }        /* esta andando: nada a fazer */
-    if (now - g_walk_t0 < 700u * (g_walk_kicks + 1)) return;
-    lg("Heroi parado com o analogico segurado: reenviando clique (%d)", g_walk_kicks + 1);
+    if (d > 0.3f) {                                     /* andou: novo ponto de referencia */
+        g_walk_px = g_px; g_walk_py = g_py; g_wd_t = now; g_walk_kicks = 0;
+        return;
+    }
+    if (now - g_wd_t < 800) return;
+    g_wd_t = now;                                       /* parado: repete o clique a cada 0,8 s */
+    if (g_walk_kicks < 3) lg("Heroi parado com o analogico segurado: reenviando clique (%d)", g_walk_kicks + 1);
     if (!g_key_down[VK_SHIFT]) send_key(VK_SHIFT, 0);
     if (!g_key_down[VK_CONTROL]) send_key(VK_CONTROL, 0);
     if (!g_key_down[VK_MENU]) send_key(VK_MENU, 0);
@@ -1532,7 +1581,8 @@ static void d2nx_install_hook(void)
     g_game_tid = GetWindowThreadProcessId(g_hwnd, NULL);
     if (g_game_tid) {
         g_getmsg_hook = SetWindowsHookExW(WH_GETMESSAGE, getmsg_hook, NULL, g_game_tid);
-        lg("Hook WH_GETMESSAGE instalado na game thread tid=%lu: %p", g_game_tid, g_getmsg_hook);
+        lg("Hook WH_GETMESSAGE na game thread tid=%lu: %p (erro %lu)", g_game_tid, g_getmsg_hook,
+           g_getmsg_hook ? 0UL : GetLastError());
     }
 }
 
@@ -2021,6 +2071,20 @@ static void tick(float dt)
         d2nx_install_hook();
     }
     poll_pad();
+    {   /* Caixa de chat aberta sem pedido. Um Enter que ficou na fila do jogo durante o carregamento
+         * (o + / X que entrou no jogo) abria o chat segundos depois de entrar, e com o chat aberto o heroi
+         * nao anda: era o "anda dois passos e congela" (reproduzido no Ryujinx: chat ABERTO com o
+         * analogico segurado e o heroi parado; volta quando um ESC fecha o chat). */
+        static int chat = -1;
+        int c = g_player ? ui_open(UI_CHAT) : 0;
+        if (c != chat) {
+            if (c && chat == 0 && GetTickCount() - g_enter_t > 1500) {
+                lg("chat do jogo aberto sem pedido (Enter atrasado): fechando com ESC");
+                tap_key(VK_ESCAPE, 0);
+            } else if (chat >= 0 || c) lg("chat do jogo %s", c ? "aberto" : "fechado");
+            chat = c;
+        }
+    }
     fg = GetForegroundWindow();
     if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate) {
         DWORD pid = 0;
@@ -2107,6 +2171,14 @@ static void tick(float dt)
         }
     }
     mode = !g_player ? M_MENU : any_panel_open() ? M_PANEL : M_GAME;
+    set_cursor_hidden(mode == M_GAME);
+    if (cfg.cursortest && g_player) {   /* AutoTest CursorTest=1: abre o inventario aos 6 s e fecha aos 14 s */
+        static DWORD t_in; static int step;
+        DWORD now = GetTickCount();
+        if (!t_in) t_in = now;
+        if (step == 0 && now - t_in > 6000) { lg("[CursorTest] abrindo inventario (I)"); tap_key('I', 0); step = 1; }
+        else if (step == 1 && now - t_in > 14000) { lg("[CursorTest] fechando inventario (I)"); tap_key('I', 0); step = 2; }
+    }
     if (mode != g_mode) {
         release_all();
         /* cada partida comeca com a preferencia do INI; L3 (tecla R) alterna depois */
@@ -2171,10 +2243,26 @@ static void tick(float dt)
         static DWORD s_walk_t0;
         DWORD now = GetTickCount();
         if (!s_walk_t0) s_walk_t0 = now;
-        if (now - s_walk_t0 > 1500 && now - s_walk_t0 < 10000) {
+        if (cfg.autowalk == 1) {
+            if (now - s_walk_t0 > 1500 && now - s_walk_t0 < 10000) {
+                g_pad.connected = 1;
+                g_pad.lx = 0.85f;
+                g_pad.ly = 0.30f;
+            }
+        } else if (now - s_walk_t0 > 1500 && now - s_walk_t0 < 1500 + (DWORD)cfg.autowalk * 1000) {
+            /* AutoWalk=N: anda N segundos sem parar, girando a direcao a cada 3 s (teste de congelamento) */
+            static const float dirs[4][2] = { { 0.85f, 0.30f }, { 0.30f, 0.85f }, { -0.85f, -0.30f }, { -0.30f, -0.85f } };
+            static DWORD s_last_log;
+            int k = (int)(((now - s_walk_t0) / 3000) % 4);
             g_pad.connected = 1;
-            g_pad.lx = 0.85f;
-            g_pad.ly = 0.30f;
+            g_pad.lx = dirs[k][0];
+            g_pad.ly = dirs[k][1];
+            if (now - s_last_log >= 1000) {
+                s_last_log = now;
+                lg("[AutoWalk] t=%lus pos %.1f,%.1f mouse %ld,%ld modo %lu", (now - s_walk_t0) / 1000, g_px, g_py,
+                   g_ver ? (long)rd32(g_client + g_ver->mouse_x) : -1, g_ver ? (long)rd32(g_client + g_ver->mouse_y) : -1,
+                   g_player ? rd32(g_player + U_MODE) : 0);
+            }
         }
     }
 
@@ -2289,7 +2377,7 @@ static void tick(float dt)
             walk_point(g_pad.lx / m, g_pad.ly / m, &gx, &gy);
             move_cursor(gx, gy);
             if (!g_walking) {
-                send_button(0, 1); g_walking = 1; g_walk_t0 = GetTickCount();
+                send_button(0, 1); g_walking = 1; g_walk_t0 = GetTickCount(); g_wd_t = 0;
                 g_walk_px = g_px; g_walk_py = g_py; g_walk_kicks = 0;
             } else { enforce_run(); walk_watchdog(); }
         } else if (g_walking) {
@@ -2340,6 +2428,7 @@ static DWORD WINAPI worker(void *arg)
         if (g_ver_override.print_msg) merged.print_msg = g_ver_override.print_msg;
         g_ver = &merged;
         lg("Diablo II %s detectado (D2Client %08lX)", g_ver->name, g_client);
+        cursor_draw_init();
     } else {
         IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)(g_client + ((IMAGE_DOS_HEADER *)g_client)->e_lfanew);
         lg("D2Client desconhecido (timestamp %08lX, tamanho %lX): modo cursor", nt->FileHeader.TimeDateStamp,

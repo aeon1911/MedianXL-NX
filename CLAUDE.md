@@ -52,11 +52,18 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
   apagar = `WM_KEYDOWN VK_BACK` (WM_CHAR 8 não apaga); SendInput/keybd_event/PostMessage de WM_KEYDOWN
   funcionam para teclas do jogo — usar UM caminho só (antes os 3 juntos alternavam painéis 2-3 vezes).
   Mensagens postadas são entregues antes da entrada do SendInput (não misturar na mesma sequência).
+- **"Anda dois passos e congela"** = caixa de chat aberta por um Enter atrasado do menu (herói não anda com
+  chat aberto). D2NXPad fecha o chat se abrir sem Enter pedido. `WH_GETMESSAGE` NÃO funciona no Wine-NX.
+- **Cursor oculto na partida**: rotinas de desenho do D2Client 1.13c +0x16870 e +0x15FC0 viram `ret` sem
+  painel aberto (`set_cursor_hidden`). O mouse do jogo segue sendo usado (invisível) para andar/atacar.
 - `−` no menu não manda ESC; saves ficam em `drive_c/users/steamuser/AppData/Roaming/MedianXL/save`
   (`d2nxpad.log` lista cada save).
 
 ## Testes
-- `./tools/run_fase3_ryujinx_test.sh`: regressão (AutoJoin carrega Barbaro/Reunow, AutoWalk anda 30 s).
+- `./tools/run_fase3_ryujinx_test.sh`: regressão (AutoJoin carrega Barbaro/Reunow, `AutoWalk=40` anda 40 s
+  girando a direção; exige ≥ 10 posições distintas). NUNCA aceitar "ficou no mundo" sem o herói andar.
+- Capturas da janela do Ryujinx (`xprop` + `import -window`) são a forma de ver o jogo; o Print Screen do
+  jogo não mostra menus/chat. Comparar posição do mouse do jogo (log) com a captura para achar o cursor.
 - `tools/run_ryujinx_fresh_test.sh`: `AutoCreate=1` — cria personagem com o editor de nome (esperado `Testd`),
   entra, Save and Exit, recarrega (`SUCESSO 2/2`). Tira os saves de teste do SD e devolve no fim
   (`EMPTYDIR=1` cria a pasta save vazia; sem ele simula console novo). Captura a janela do Ryujinx com

@@ -21,7 +21,9 @@ echo "Ponteiro run-next.txt: $(cat build/ryujinx-test/sdcard/switch/wine/run-nex
 # 3. Habilitar telemetria de profiling para monitorar frames e ativar AutoTest no Ryujinx
 touch build/ryujinx-test/sdcard/switch/wine/profile.txt
 sed -i 's/AutoJoin=0/AutoJoin=1/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
-sed -i 's/AutoWalk=0/AutoWalk=1/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
+# AutoWalk=40: anda 40 s sem parar, girando a direcao (o AutoWalk=1 antigo andava 8 s e o teste aprovava
+# mesmo com o heroi parado no chat aberto)
+sed -i 's/^AutoWalk=.*/AutoWalk=40/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
 
 # 4. Iniciar Ryujinx (usando binario isolado para evitar conflito com outros processos)
 echo "Iniciando Ryujinx..."
@@ -50,7 +52,7 @@ success = False
 in_game = False
 in_game_time = 0
 
-while time.time() - start < 180:
+while time.time() - start < 240:
     time.sleep(3)
     elapsed = time.time() - start
     
@@ -92,8 +94,18 @@ while time.time() - start < 180:
                     in_game = True
                     in_game_time = elapsed
 
-    if in_game and (elapsed - in_game_time > 30):
-        print(f"Sucesso Total: Personagem jogavel e no mundo por mais de 30 segundos!", flush=True)
+    if in_game and (elapsed - in_game_time > 50):
+        # o heroi tem de andar: posicoes distintas registradas pelo AutoWalk (1 por segundo)
+        import re
+        pos = set()
+        for l in open(pad_log, errors="replace"):
+            m = re.search(r"\[AutoWalk\] t=\d+s pos ([\d.]+),([\d.]+)", l)
+            if m: pos.add((round(float(m.group(1))), round(float(m.group(2)))))
+        chat = sum(1 for l in open(pad_log, errors="replace") if "chat do jogo aberto" in l)
+        if len(pos) >= 10:
+            print(f"Sucesso Total: heroi andou ({len(pos)} posicoes distintas em 40 s; chat fechado {chat}x)", flush=True)
+        else:
+            print(f"FALHA: heroi quase parado ({len(pos)} posicoes distintas em 40 s)", flush=True)
         break
 
 print("Fim da janela de monitoramento.")
@@ -104,6 +116,8 @@ kill -15 $RYU_PID 2>/dev/null || true
 sleep 2
 kill -9 $RYU_PID 2>/dev/null || true
 wait $RYU_PID 2>/dev/null || true
+
+sed -i 's/^AutoJoin=.*/AutoJoin=0/; s/^AutoWalk=.*/AutoWalk=0/' build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini
 
 echo "=== Resumo dos Logs da Fase 3 ==="
 if [ -f "build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/D2Autorun.log" ]; then
