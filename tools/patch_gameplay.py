@@ -48,10 +48,18 @@ def patch_tables(target_d2_dir, ini_path=None):
     print(f"[GAMEPLAY] Multiplicadores carregados: XP={xp_mult}x, Runas={rune_mult}x, Unicos={unique_mult}x, Raros={rare_mult}x, Ouro={start_gold}")
 
     excel_dir = os.path.join(target_d2_dir, "data/global/excel")
+    orig_dir = os.path.join(BASE_DIR, "build/gameplay_orig")
+    os.makedirs(orig_dir, exist_ok=True)
+    def orig_table(name):
+        keep = os.path.join(orig_dir, name)
+        if not os.path.exists(keep) and os.path.exists(os.path.join("/tmp", name)):
+            import shutil
+            shutil.copy2(os.path.join("/tmp", name), keep)
+        return keep
     os.makedirs(excel_dir, exist_ok=True)
 
     # 1. Experience
-    with open("/tmp/experience_sp.bin", "rb") as f:
+    with open(orig_table("experience_sp.bin"), "rb") as f:
         exp_data = bytearray(f.read())
     cnt = (len(exp_data) - 0x20) // 32
     for lvl in range(cnt):
@@ -66,7 +74,7 @@ def patch_tables(target_d2_dir, ini_path=None):
     print(f"[GAMEPLAY]   experience_sp.bin gerado ({cnt} niveis, {xp_mult}x XP)")
 
     # 2. ItemRatio
-    with open("/tmp/itemratio_sp.bin", "rb") as f:
+    with open(orig_table("itemratio_sp.bin"), "rb") as f:
         ratio_data = bytearray(f.read())
     rows = struct.unpack("<I", ratio_data[:4])[0]
     for r in range(rows):
@@ -85,7 +93,7 @@ def patch_tables(target_d2_dir, ini_path=None):
     print(f"[GAMEPLAY]   itemratio_sp.bin gerado (Unicos {unique_mult}x, Raros {rare_mult}x)")
 
     # 3. TreasureClassEx
-    with open("/tmp/treasureclassex.bin", "rb") as f:
+    with open(orig_table("treasureclassex.bin"), "rb") as f:
         tc_data = bytearray(f.read())
     tc_rows = struct.unpack("<I", tc_data[:4])[0]
     row_size = 736
@@ -106,22 +114,14 @@ def patch_tables(target_d2_dir, ini_path=None):
         f.write(tc_data)
     print(f"[GAMEPLAY]   treasureclassex.bin gerado ({rune_mods} entradas de runas com {rune_mult}x)")
 
-    # 4. CharStats
-    with open("/tmp/charstats.bin", "rb") as f:
-        cs_data = bytearray(f.read())
-    cs_classes = struct.unpack("<I", cs_data[:4])[0]
-    row_len = 196
-    for c in range(cs_classes):
-        offset = 4 + c * row_len
-        box_pos = cs_data.find(b"box ", offset, offset + row_len)
-        if box_pos != -1:
-            item_start = box_pos - 8
-            slot9_pos = item_start + 8 * 8
-            cs_data[slot9_pos:slot9_pos+4] = b"gld "
-            cs_data[slot9_pos+4:slot9_pos+8] = struct.pack("<HH", 0, min(10000, start_gold))
-    with open(os.path.join(excel_dir, "charstats.bin"), "wb") as f:
-        f.write(cs_data)
-    print(f"[GAMEPLAY]   charstats.bin gerado (Ouro inicial={min(10000, start_gold)} para 7 classes)")
+    # 4. CharStats: NAO MODIFICAR.
+    # Inserir "gld " como item inicial cria um item de ouro invalido no inventario do personagem novo,
+    # e o save resultante e rejeitado pelo Median XL ("Bad Character File ... not compatible with Median XL").
+    # Remove qualquer charstats.bin gerado por versoes anteriores para voltar ao original do MPQ.
+    stale_cs = os.path.join(excel_dir, "charstats.bin")
+    if os.path.exists(stale_cs):
+        os.remove(stale_cs)
+        print("[GAMEPLAY]   charstats.bin removido (tabela original do Median XL restaurada)")
 
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "sd-card/switch/wine/drive_c/DiabloII"

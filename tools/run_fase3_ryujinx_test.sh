@@ -113,7 +113,7 @@ fi
 
 if [ -f "build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.log" ]; then
     echo "--- d2nxpad.log ---"
-    head -n 20 "build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.log"
+    cat "build/ryujinx-test/sdcard/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.log"
 fi
 
 echo "--- Ultimas 10 linhas do autorun_runtime.log ---"

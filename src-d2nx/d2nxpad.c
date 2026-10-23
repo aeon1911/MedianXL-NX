@@ -539,33 +539,21 @@ static void game_to_client(float gx, float gy, int *cx, int *cy)
     *cy = (int)lroundf(g_oy + gy * g_sy);
 }
 
-static void client_to_screen(int cx, int cy, int *sx, int *sy)
-{
-    POINT p = { 0, 0 };
-    if (g_hwnd) ClientToScreen(g_hwnd, &p);
-    *sx = p.x + cx;
-    *sy = p.y + cy;
-}
-
 static void send_button(int right, int down)
 {
     if (right) g_rbtn = down; else g_lbtn = down;
     if (g_hwnd) {
-        int cx, cy, sx, sy;
+        int cx, cy;
         game_to_client(g_curx, g_cury, &cx, &cy);
-        client_to_screen(cx, cy, &sx, &sy);
-        SetCursorPos(sx, sy);
         DWORD msg = right ? (down ? WM_RBUTTONDOWN : WM_RBUTTONUP)
                           : (down ? WM_LBUTTONDOWN : WM_LBUTTONUP);
         WPARAM w = 0;
         if (down) w |= right ? MK_RBUTTON : MK_LBUTTON;
         if (g_key_down[VK_SHIFT]) w |= MK_SHIFT;
         if (g_key_down[VK_CONTROL]) w |= MK_CONTROL;
+        PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
         PostMessageA(g_hwnd, msg, w, MAKELPARAM(cx, cy));
     }
-    DWORD flags = right ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
-                        : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);
-    mouse_event(flags, 0, 0, 0, 0);
 }
 
 /* posicao do mouse dentro do jogo, lida da memoria (-1 se desconhecido) */
@@ -588,7 +576,7 @@ static int game_mouse(int *x, int *y)
 
 static void read_resolution(void)
 {
-    if (!g_player) { g_resx = 800; g_resy = 600; return; }   /* menus do LoD: 800x600 */
+    if (!g_player) { g_resx = 800; g_resy = 600; return; }   /* menus do LoD sao sempre 800x600 */
     if (g_ver && g_ver->res_x && g_ver->res_y) {
         int x = (int)rd32(g_client + g_ver->res_x), y = (int)rd32(g_client + g_ver->res_y);
         if (x >= 640 && x <= 4096 && y >= 480 && y <= 4096) { g_resx = x; g_resy = y; }
@@ -605,7 +593,7 @@ static void fallback_mapping(void)
     w = (float)(rc.right - rc.left); h = (float)(rc.bottom - rc.top);
     if (w < 16 || h < 16) { w = (float)g_resx; h = (float)g_resy; }
     if (w >= 1200 && h >= 700 && fabsf((w / h) - (16.0f / 9.0f)) < 0.2f) {
-        /* 16:9 widescreen no Switch (1280x720) com D2GL stretched: preenche 100% da tela */
+        /* 16:9 widescreen no Switch (1280x720) com D2GL: preenche 100% da tela */
         g_sx = w / (float)g_resx;
         g_sy = h / (float)g_resy;
         g_ox = 0.0f;
@@ -629,13 +617,11 @@ static void sync_cursor(void)
 static void move_cursor(float gx, float gy)
 {
     if (!g_hwnd) return;
-    int cx, cy, sx, sy;
+    int cx, cy;
     g_cursor_parked = 0;
     g_curx = clampf(gx, 0, (float)g_resx - 1);
     g_cury = clampf(gy, 0, (float)g_resy - 1);
     game_to_client(g_curx, g_cury, &cx, &cy);
-    client_to_screen(cx, cy, &sx, &sy);
-    SetCursorPos(sx, sy);
 
     WPARAM w = 0;
     if (g_lbtn) w |= MK_LBUTTON;
@@ -644,12 +630,6 @@ static void move_cursor(float gx, float gy)
     if (g_key_down[VK_CONTROL]) w |= MK_CONTROL;
 
     PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
-    if (g_client && g_ver && g_ver->mouse_x && g_ver->mouse_y) {
-        if (readable(g_client + g_ver->mouse_x, 4))
-            *(volatile DWORD *)(g_client + g_ver->mouse_x) = (DWORD)lroundf(g_curx);
-        if (readable(g_client + g_ver->mouse_y, 4))
-            *(volatile DWORD *)(g_client + g_ver->mouse_y) = (DWORD)lroundf(g_cury);
-    }
 }
 
 static void park_cursor(void)
@@ -657,16 +637,7 @@ static void park_cursor(void)
     if (!g_hwnd || g_cursor_parked) return;
     int park_x = 2000;
     int park_y = 2000;
-    int sx, sy;
-    client_to_screen(park_x, park_y, &sx, &sy);
-    SetCursorPos(sx, sy);
     PostMessageA(g_hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(park_x, park_y));
-    if (g_client && g_ver && g_ver->mouse_x && g_ver->mouse_y) {
-        if (readable(g_client + g_ver->mouse_x, 4))
-            *(volatile DWORD *)(g_client + g_ver->mouse_x) = (DWORD)park_x;
-        if (readable(g_client + g_ver->mouse_y, 4))
-            *(volatile DWORD *)(g_client + g_ver->mouse_y) = (DWORD)park_y;
-    }
     g_cursor_parked = 1;
 }
 
@@ -1073,10 +1044,8 @@ static void walk_point(float dx, float dy, float *gx, float *gy)
 static void click(int right, int mods)
 {
     if (!g_hwnd) return;
-    int cx, cy, sx, sy;
+    int cx, cy;
     game_to_client(g_curx, g_cury, &cx, &cy);
-    client_to_screen(cx, cy, &sx, &sy);
-    SetCursorPos(sx, sy);
     DWORD md = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
     DWORD mu = right ? WM_RBUTTONUP : WM_LBUTTONUP;
     WPARAM w = right ? MK_RBUTTON : MK_LBUTTON;
@@ -1086,10 +1055,8 @@ static void click(int right, int mods)
     key_mods(mods, 1);
     PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
     PostMessageA(g_hwnd, md, w, MAKELPARAM(cx, cy));
-    mouse_event(right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
     Sleep(35);
     PostMessageA(g_hwnd, mu, 0, MAKELPARAM(cx, cy));
-    mouse_event(right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
     key_mods(mods, 0);
 }
 
@@ -1928,6 +1895,7 @@ static void tick(float dt)
            g_player, g_px, g_py, g_level);
         cfg.autojoin = 0;
     }
+
     if (mode == M_GAME && cfg.autowalk) {
         static DWORD s_walk_t0;
         DWORD now = GetTickCount();
