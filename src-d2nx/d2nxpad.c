@@ -78,7 +78,7 @@ enum Btn { B_A, B_B, B_X, B_Y, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_L3, B_R3
 static const char *btn_names[B_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
                                           "L3", "R3", "Up", "Down", "Left", "Right" };
 enum ActKind { A_NONE, A_ATTACK, A_SKILL, A_RIGHT, A_KEY, A_HOLD, A_LCLICK, A_RCLICK, A_SHIFTCLICK,
-               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD };
+               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD, A_OSK };
 typedef struct { BYTE kind; BYTE vk; BYTE mods; BYTE n; } Act;  /* mods: 1 shift 2 ctrl 4 alt */
 enum Ctx { C_GAME, C_LAYER, C_PLUS, C_PANEL, C_MENU, C_COUNT };
 static const char *ctx_names[C_COUNT] = { "Jogo", "Jogo.ZL", "Jogo.Mais", "Painel", "Menu" };
@@ -236,11 +236,13 @@ static const char *default_ini =
 "B=KEY:ESC\n"
 "X=KEY:ENTER\n"
 "Plus=KEY:ENTER\n"
-"; - nao manda ESC: - + R3 e o atalho do teclado do Autorun, e o ESC saia da tela de nome/fechava o jogo\n"
+"; - nao manda ESC: o ESC saia da tela de nome/fechava o jogo\n"
 "Minus=KEYBOARD\n"
 "L=KEY:SHIFT\n"
 "R=KEY:TAB\n"
-"; teclado do console na tela (digitar o nome do personagem)\n"
+"; KEYBOARD = editor de nome: escreve um nome na caixa do jogo e o direcional edita\n"
+"; (cima/baixo troca a letra, direita poe letra, esquerda apaga, Y sorteia, + ou X cria, B ou R3 sai).\n"
+"; OSK = teclado do Autorun (com o D2GL ele abre mas nao aparece na tela)\n"
 "L3=KEYBOARD\n"
 "R3=KEYBOARD\n"
 "Up=KEY:UP\n"
@@ -293,6 +295,7 @@ static Act parse_act(const char *v)
     else if (!lstrcmpiA(buf, "POPUP_L")) a.kind = A_POPUP_L;
     else if (!lstrcmpiA(buf, "TYPENAME")) a.kind = A_TYPENAME;
     else if (!lstrcmpiA(buf, "KEYBOARD")) a.kind = A_KEYBOARD;
+    else if (!lstrcmpiA(buf, "OSK")) a.kind = A_OSK;
     else if (!strncasecmp(buf, "KEY:", 4) || !strncasecmp(buf, "HOLD:", 5)) {
         char *k = buf + (buf[0] == 'K' || buf[0] == 'k' ? 4 : 5);
         a.kind = (buf[0] == 'K' || buf[0] == 'k') ? A_KEY : A_HOLD;
@@ -509,6 +512,9 @@ static int g_key_down[256];
 static float g_curx = 400, g_cury = 300;   /* cursor que controlamos, em coordenadas do jogo */
 static int g_cursor_parked = 0;
 
+/* Teclas vao por um caminho so: SendInput. No Ryujinx, SendInput, keybd_event e PostMessage(WM_KEYDOWN)
+ * abrem/fecham sozinhos o menu do ESC dentro do jogo; mandar pelos tres fazia cada toque alternar o
+ * painel duas ou tres vezes. */
 static void send_key(int vk, int down)
 {
     INPUT in;
@@ -521,7 +527,6 @@ static void send_key(int vk, int down)
         vk == VK_DELETE || vk == VK_HOME || vk == VK_END || vk == VK_PRIOR || vk == VK_NEXT)
         in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
     SendInput(1, &in, sizeof(in));
-    keybd_event((BYTE)vk, (BYTE)in.ki.wScan, in.ki.dwFlags, 0);
     g_key_down[vk & 0xff] = down;
 }
 static void key_mods(int mods, int down)
@@ -530,21 +535,34 @@ static void key_mods(int mods, int down)
     if (mods & 2) send_key(VK_CONTROL, down);
     if (mods & 4) send_key(VK_MENU, down);
 }
+/* Texto: WM_CHAR postado com contagem de repeticao 1 (lParam 1). No Wine-NX a tecla do SendInput nao
+ * vira caractere na caixa de nome e o WM_CHAR com contagem 0 era ignorado; com 1 o texto entra. */
+/* lParam de tecla como o Windows gera: contagem de repeticao 1 e scan code */
+static LPARAM key_lparam(int vk, int up)
+{
+    DWORD lp = 1 | ((MapVirtualKeyA(vk, 0) & 0xFF) << 16);
+    return (LPARAM)(up ? (lp | 0xC0000000UL) : lp);
+}
+static void post_char(int c)
+{
+    if (g_hwnd) PostMessageA(g_hwnd, WM_CHAR, (WPARAM)(unsigned char)c, 1);
+}
+/* Apagar na caixa de nome: WM_KEYDOWN VK_BACK (o WM_CHAR 8 e ignorado). Postado, e nao por SendInput,
+ * para ficar na ordem das letras: o Windows entrega mensagens postadas antes da entrada do teclado. */
+static void post_back(void)
+{
+    if (!g_hwnd) return;
+    PostMessageA(g_hwnd, WM_KEYDOWN, VK_BACK, key_lparam(VK_BACK, 0));
+    PostMessageA(g_hwnd, WM_KEYUP, VK_BACK, key_lparam(VK_BACK, 1));
+}
 static void tap_key(int vk, int mods)
 {
     key_mods(mods, 1);
     send_key(vk, 1);
-    if (g_hwnd) {
-        PostMessageA(g_hwnd, WM_KEYDOWN, vk, 0);
-        if (vk >= 'A' && vk <= 'Z') PostMessageA(g_hwnd, WM_CHAR, (mods & 1) ? vk : (vk + 32), 0);
-        else if (vk >= '0' && vk <= '9') PostMessageA(g_hwnd, WM_CHAR, vk, 0);
-        else if (vk == VK_RETURN) PostMessageA(g_hwnd, WM_CHAR, '\r', 0);
-    }
+    if (vk >= 'A' && vk <= 'Z') post_char((mods & 1) ? vk : (vk + 32));
+    else if (vk >= '0' && vk <= '9') post_char(vk);
     Sleep(35);
     send_key(vk, 0);
-    if (g_hwnd) {
-        PostMessageA(g_hwnd, WM_KEYUP, vk, 0xC0000001);
-    }
     key_mods(mods, 0);
 }
 
@@ -560,24 +578,6 @@ static void type_string(const char *s)
             tap_key(vk, shift ? 1 : 0);
             Sleep(40);
         }
-    }
-}
-
-/* Texto como o teclado do Autorun entrega: SendInput com KEYEVENTF_UNICODE (vira WM_CHAR).
- * Antes, traz a janela do jogo para o foco, que e para onde o Wine manda o teclado. */
-static void type_unicode(const char *s)
-{
-    if (g_hwnd) SetForegroundWindow(g_hwnd);
-    while (*s) {
-        INPUT in[2];
-        memset(in, 0, sizeof(in));
-        in[0].type = in[1].type = INPUT_KEYBOARD;
-        in[0].ki.wScan = in[1].ki.wScan = (WORD)(unsigned char)*s++;
-        in[0].ki.dwFlags = KEYEVENTF_UNICODE;
-        in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-        UINT n = SendInput(2, in, sizeof(INPUT));
-        if (n != 2) lg("SendInput unicode: %u de 2 (erro %lu)", n, GetLastError());
-        Sleep(60);
     }
 }
 
@@ -1247,6 +1247,92 @@ static void open_keyboard(void)
     if (ok) g_osk_wait = 1;
 }
 
+/* Editor de nome. O teclado do Autorun abre mas nao aparece com o D2GL (o runtime nao desenha o teclado
+ * nem num programa OpenGL minimo, testado no Ryujinx), entao o nome e editado pelo controle e o proprio
+ * campo do jogo mostra o texto. Texto por WM_CHAR com contagem 1 e apagar por WM_KEYDOWN VK_BACK, os dois
+ * postados (testado no Ryujinx, uma forma de cada vez, conferindo a caixa de nome nas capturas). */
+static const char *g_name_ideas[] = {
+    "Aldric", "Kaela", "Toran", "Mirela", "Brann", "Selis", "Varek", "Ilyra", "Doran", "Neris",
+    "Garon", "Lysara", "Theron", "Zaria", "Corvin", "Elara", "Rhagar", "Sylas", "Tamsin", "Valen"
+};
+static struct { int on, len, rep_b; char name[16]; DWORD rep_t; } g_ned;
+
+static void ned_type(const char *n)
+{
+    int i;
+    for (i = 0; i < 16; i++) post_back();
+    g_ned.len = 0;
+    for (; *n && g_ned.len < 15; n++) { post_char(*n); g_ned.name[g_ned.len++] = *n; }
+    g_ned.name[g_ned.len] = 0;
+}
+static void ned_begin(const char *n)
+{
+    release_all();
+    g_ned.on = 1;
+    g_ned.rep_b = -1;
+    ned_type(n ? n : g_name_ideas[GetTickCount() % (sizeof(g_name_ideas) / sizeof(g_name_ideas[0]))]);
+    lg("editor de nome: aberto com '%s'", g_ned.name);
+}
+static void ned_end(const char *why)
+{
+    if (!g_ned.on) return;
+    g_ned.on = 0;
+    lg("editor de nome: %s ('%s')", why, g_ned.name);
+}
+/* cima (+1) / baixo (-1): troca a ultima letra (a 1a e maiuscula) */
+static void ned_cycle(int dir)
+{
+    char base, c;
+    if (!g_ned.len) { post_char('A'); g_ned.name[g_ned.len++] = 'A'; g_ned.name[g_ned.len] = 0; return; }
+    base = g_ned.len == 1 ? 'A' : 'a';
+    c = g_ned.name[g_ned.len - 1];
+    if (c < base || c > base + 25) c = base;
+    c = (char)(base + (c - base + dir + 26) % 26);
+    post_back();
+    post_char(c);
+    g_ned.name[g_ned.len - 1] = c;
+}
+static void ned_add(void)
+{
+    char c = g_ned.len ? 'a' : 'A';
+    if (g_ned.len >= 15) return;
+    post_char(c);
+    g_ned.name[g_ned.len++] = c;
+    g_ned.name[g_ned.len] = 0;
+}
+static void ned_del(void)
+{
+    if (!g_ned.len) return;
+    post_back();
+    g_ned.name[--g_ned.len] = 0;
+}
+/* Botoes do controle com o editor aberto (so fora da partida). Devolve 1 se o editor tratou. */
+static int name_editor_tick(void)
+{
+    static const int dirs[] = { B_UP, B_DOWN, B_LEFT, B_RIGHT };
+    DWORD now = GetTickCount();
+    unsigned i;
+    if (!g_ned.on) return 0;
+    if (PRESSED(B_PLUS) || PRESSED(B_X)) { ned_end("Enter"); tap_key(VK_RETURN, 0); return 1; }
+    if (PRESSED(B_A)) { ned_end("ok"); return 1; }
+    if (PRESSED(B_B) || PRESSED(B_R3) || PRESSED(B_L3) || PRESSED(B_MINUS)) { ned_end("fechado"); return 1; }
+    if (PRESSED(B_Y)) {
+        ned_type(g_name_ideas[now % (sizeof(g_name_ideas) / sizeof(g_name_ideas[0]))]);
+        return 1;
+    }
+    for (i = 0; i < 4; i++) {
+        int b = dirs[i], fire = 0;
+        if (PRESSED(b)) { fire = 1; g_ned.rep_b = b; g_ned.rep_t = now + 350; }
+        else if (g_pad.down[b] && g_ned.rep_b == b && now >= g_ned.rep_t) { fire = 1; g_ned.rep_t = now + 90; }
+        if (!fire) continue;
+        if (b == B_UP) ned_cycle(1);
+        else if (b == B_DOWN) ned_cycle(-1);
+        else if (b == B_RIGHT) ned_add();
+        else ned_del();
+    }
+    return 1;
+}
+
 static void start_action(int b, Act a)
 {
     Hold *h = &g_hold[b];
@@ -1272,7 +1358,8 @@ static void start_action(int b, Act a)
     case A_POPUP_L: do_popup(0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
     case A_TYPENAME: type_string("Switch"); h->active = 0; break;
-    case A_KEYBOARD: open_keyboard(); h->active = 0; break;
+    case A_KEYBOARD: if (g_mode == M_GAME) open_keyboard(); else ned_begin(NULL); h->active = 0; break;
+    case A_OSK: open_keyboard(); h->active = 0; break;
     default: h->active = 0; break;
     }
 }
@@ -1815,6 +1902,14 @@ static void autocreate_tick(int mode)
     static int stage;
     DWORD now = GetTickCount();
     if (!t0) t0 = now;
+    if (cfg.autocreate == 9) {   /* so abre o teclado do console no menu, para conferir o desenho */
+        if (!stage && mode == M_MENU && now - t0 >= 12000) {
+            lg("[AutoCreate] modo 9: abrindo o teclado do console");
+            open_keyboard();
+            stage = 99;
+        }
+        return;
+    }
     switch (stage) {
     case 0:   /* menu principal */
         if (mode == M_MENU && now - t0 >= 8000) {
@@ -1845,15 +1940,19 @@ static void autocreate_tick(int mode)
         break;
     case 3:   /* nome + Enter */
         if (now - t0 >= 6000) {
-            lg("[AutoCreate] digitando nome 'Teste' e Enter");
+            /* as mesmas funcoes do editor de nome do R3: Teste, cima (Testf), direita (Testfa),
+             * esquerda (Testf), baixo, baixo (Testd). O save tem de sair como Testd. */
+            lg("[AutoCreate] editor de nome: Teste, cima, direita, esquerda, baixo, baixo (esperado Testd)");
             autocreate_shot("classe escolhida");
-            open_keyboard();   /* o mesmo que o R3 faz na tela de nome */
-            Sleep(1500);
-            type_unicode("Teste");
-            Sleep(300);
+            ned_begin("Teste"); Sleep(300);
+            ned_cycle(1); Sleep(200);
+            ned_add(); Sleep(200);
+            ned_del(); Sleep(200);
+            ned_cycle(-1); Sleep(200);
+            ned_cycle(-1); Sleep(300);
+            ned_end("Enter (teste)");
             autocreate_shot("nome digitado");
-            if (g_hwnd) SetForegroundWindow(g_hwnd);
-            send_key(VK_RETURN, 1); Sleep(60); send_key(VK_RETURN, 0);
+            tap_key(VK_RETURN, 0);   /* o mesmo Enter do X/+ no menu */
             stage = 4; t0 = now;
         }
         break;
@@ -1871,9 +1970,11 @@ static void autocreate_tick(int mode)
     case 5:   /* salvar e sair */
         if (now - t0 >= 8000) {
             lg("[AutoCreate] ESC -> Save and Exit (res %dx%d)", g_resx, g_resy);
+            /* o mesmo toque do + no jogo; "Save and Exit" e a 2a linha do menu (capturas do emulador) */
             tap_key(VK_ESCAPE, 0);
-            Sleep(800);
-            autocreate_click(648, 340);
+            Sleep(2500);
+            autocreate_click(640, 317);
+            now = GetTickCount();
             stage = 6; t0 = now;
         }
         break;
@@ -1911,7 +2012,7 @@ static void autocreate_tick(int mode)
 
 static void tick(float dt)
 {
-    int b, ctx, mode;
+    int b, ctx, mode, editing;
     HWND fg;
     if (!g_hwnd || !IsWindow(g_hwnd)) {
         g_hwnd = find_game_window();
@@ -2149,7 +2250,10 @@ static void tick(float dt)
     else if (mode == M_PANEL) ctx = C_PANEL;
     else ctx = C_MENU;
 
-    for (b = 0; b < B_COUNT; b++) {
+    if (ctx != C_MENU) ned_end("fora do menu");
+    /* com o editor de nome aberto os botoes sao dele (os analogicos seguem movendo o cursor) */
+    editing = ctx == C_MENU && name_editor_tick();
+    for (b = 0; b < B_COUNT && !editing; b++) {
         if (PRESSED(b)) {
             Act a;
             if (mode == M_GAME && b == B_PLUS) { g_plus_used = 0; continue; }

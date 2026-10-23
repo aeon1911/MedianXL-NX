@@ -98,10 +98,20 @@ O controle do jogo foi desenvolvido pelo usuário através do **D2PAD** (`src-d2
 | **A** | Clique (confirmar / escolher classe) |
 | **B** | Voltar (`ESC`) |
 | **X / Plus (+)** | `Enter` (confirmar o nome e criar o personagem) |
-| **R3 ou L3** | Abre o **teclado do console** na tela para digitar o nome do personagem |
-| **Minus (−)** | Também abre o teclado (não manda mais `ESC`, que tirava da tela de nome ou fechava o jogo) |
+| **R3, L3 ou Minus (−)** | Abre o **editor de nome**: escreve um nome pronto na caixa "Character Name" |
 
-No teclado do console: direcional/analógico esquerdo navega, **A** digita a tecla, **B** apaga, **Y** espaço, **X** maiúsculas, **Plus (+)** `Enter`, **Minus (−)** fecha o teclado. O toque na tela também funciona.
+Com o editor de nome aberto (o texto aparece na própria caixa do jogo):
+
+| Botão | Ação |
+|---|---|
+| **↑ / ↓** | Avança / volta a última letra (segure para correr o alfabeto) |
+| **→** | Acrescenta uma letra |
+| **←** | Apaga a última letra |
+| **Y** | Sorteia outro nome |
+| **+ ou X** | Cria o personagem (`Enter`) |
+| **A, B ou R3** | Fecha o editor e mantém o nome |
+
+O teclado flutuante do Autorun (atalho `− + R3`) abre mas **não aparece** na tela com o vídeo D2GL; evite esse atalho no Median XL.
 
 ---
 
@@ -112,7 +122,7 @@ No teclado do console: direcional/analógico esquerdo navega, **A** digita a tec
   sdmc:/switch/wine/drive_c/users/steamuser/AppData/Roaming/MedianXL/save/
   ```
   Você pode fazer backup ou transferir personagens entre o PC e o Nintendo Switch copiando os arquivos `.d2s` (com `.key`, `.ma0`, `.map`). O `d2nx/d2nxpad.log` lista, a cada boot, cada save com tamanho e se o cabeçalho está íntegro.
-- **"Generic bad character file":** versões anteriores do D2NXPad gravavam `data/global/excel/charstats.bin` com ouro no kit inicial (pelo menu de gameplay in-game), e o Median XL recusa personagens criados assim. O `D2Autorun` agora apaga esse arquivo no boot e o menu não o gera mais (a opção "Ouro inicial" ficou indisponível). Personagens criados enquanto o arquivo existia podem continuar recusados: apague-os na pasta acima e crie de novo.
+- **"Generic bad character file":** tinha três causas, todas corrigidas no `D2Autorun`/`D2NXPad`. (1) o Wine do Autorun entrega memória acima de 2 GB a programas 32-bit e o Diablo II 1.13c não foi feito para isso: na criação do personagem o jogo parava. O `D2Autorun` agora mantém o jogo abaixo de 2 GB, como no Windows. (2) O Median XL não cria a pasta de saves acima; o `D2Autorun` a cria no boot. (3) Versões antigas do menu de gameplay gravavam `data/global/excel/charstats.bin` com ouro inicial; o arquivo é apagado no boot e a opção "Ouro inicial" ficou indisponível. Personagens criados antes desta versão podem continuar recusados: apague-os na pasta acima e crie de novo.
 - **Prevenção de Falhas do Loot Filter:** O arquivo `lootfilterconf.json` incluído na raiz vem configurado com uma lista válida `[]`. Caso decida customizar suas regras de filtro de itens, assegure-se de manter o formato JSON sintaticamente válido.
 - **Configuração de Vídeo (D2GL):** O mod está configurado com o wrapper Glide `glide3x.dll` acelerado por hardware via OpenGL, proporcionando taxas estáveis de 60 FPS com renderização suave e sem cortes de áudio.
 - **Para Sair do Jogo:** Pressione `Plus (+)` para abrir o menu do jogo, selecione **Save and Exit**, e feche o aplicativo normalmente pelo botão Home do Switch.

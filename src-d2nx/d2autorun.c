@@ -166,25 +166,28 @@ static MessageBoxA_t real_MessageBoxA;
 static MessageBoxW_t real_MessageBoxW;
 static MessageBoxIndirectA_t real_MessageBoxIndirectA;
 static MessageBoxIndirectW_t real_MessageBoxIndirectW;
+/* So o Halt da linha #904 do Fog e falta de memoria (Applet Mode). Outros Halts tem outra causa:
+ * antes todo "Halt" era rotulado como #904, o que escondeu um #1696 na criacao de personagem. */
+static void log_vm_layout(const char *tag);
+static void halt_diag(const char *t)
+{
+    if (!t || !strstr(t, "Halt")) return;
+    log_vm_layout("no Halt");
+    lg("====================================================================");
+    if (strstr(t, "#904")) {
+        lg("[DIAGNOSTICO DO HALT] Halt line #904 em Fog.dll: a memoria do processo esgotou.");
+        lg("O Homebrew Menu aberto pelo ALBUM (Applet Mode) tem so ~400 MB; o Median XL + D2GL usa ~900 MB.");
+        lg("Abra o hbmenu por Title Override: segure [R] ao abrir qualquer jogo instalado.");
+    } else {
+        lg("[DIAGNOSTICO DO HALT] Halt que NAO e o #904 (falta de memoria): veja a linha acima e o log anterior.");
+    }
+    lg("====================================================================");
+}
 static int WINAPI my_MessageBoxA(HWND w, LPCSTR t, LPCSTR c, UINT f)
 {
     (void)w; (void)f;
     lg("MessageBox [%s]: %s (auto-dispensado)", c ? c : "", t ? t : "");
-    if (t && (strstr(t, "904") || strstr(t, "007bb1bc") || strstr(t, "Halt"))) {
-        lg("====================================================================");
-        lg("[DIAGNOSTICO DEFINITIVO DO HALT]");
-        lg("Erro detectado: Halt line #904 em Fog.dll (Unrecoverable internal error).");
-        lg("Causa Raiz: A memoria RAM disponivel para o processo esgotou.");
-        lg("O Nintendo Switch limita o Homebrew Menu aberto pelo ALBUM a ~400 MB.");
-        lg("O Median XL Sigma + D2GL consome ~900 MB no carregamento dos cenarios.");
-        lg("SOLUCAO COMPROVADA:");
-        lg("  1. Va para o menu inicial (Home) do Nintendo Switch.");
-        lg("  2. SEGURE o botao [R] no Joy-Con / controle.");
-        lg("  3. Com [R] mantido pressionado, abra QUALQUER JOGO instalado no Switch.");
-        lg("  4. Quando a tela azul do Homebrew Menu abrir, solte o botao [R].");
-        lg("  5. Inicie o Diablo II / D2Autorun (disponibiliza 3200 MB de RAM!).");
-        lg("====================================================================");
-    }
+    halt_diag(t);
     return IDOK;
 }
 static int WINAPI my_MessageBoxW(HWND w, LPCWSTR t, LPCWSTR c, UINT f)
@@ -197,15 +200,7 @@ static int WINAPI my_MessageBoxIndirectA(const MSGBOXPARAMSA *p)
 {
     if (p) {
         lg("MessageBoxIndirect [%s]: %s (auto-dispensado)", p->lpszCaption ? p->lpszCaption : "", p->lpszText ? p->lpszText : "");
-        if (p->lpszText && (strstr(p->lpszText, "904") || strstr(p->lpszText, "007bb1bc") || strstr(p->lpszText, "Halt"))) {
-            lg("====================================================================");
-            lg("[DIAGNOSTICO DEFINITIVO DO HALT]");
-            lg("Erro detectado: Halt line #904 em Fog.dll (Unrecoverable internal error).");
-            lg("Causa Raiz: A memoria RAM disponivel para o processo esgotou.");
-            lg("O Nintendo Switch limita o Homebrew Menu aberto pelo ALBUM a ~400 MB.");
-            lg("SOLUCAO COMPROVADA: Abra via Title Override (segure [R] ao abrir qualquer jogo).");
-            lg("====================================================================");
-        }
+        halt_diag(p->lpszText);
     }
     return IDOK;
 }
@@ -446,6 +441,58 @@ static HANDLE WINAPI my_CreateFileW(LPCWSTR n, DWORD a, DWORD s, LPSECURITY_ATTR
 }
 
 /* ======================================================================================
+ * 5b. memoria abaixo de 2 GB (comportamento de programa nao-LAA)
+ * O Wine do Autorun trata todo programa 32-bit como "large address aware" (WINE_LARGE_ADDRESS_AWARE
+ * vem ligado, como no Proton, e o runtime nao passa variavel de ambiente). O Game.exe 1.13c nao e LAA:
+ * no Ryujinx o heap entregou ao Fog blocos em 0xC2xxxxxx e a criacao de personagem parou em Halt #1696
+ * (realloc de bloco "nao alocado": o pool do Fog usa aritmetica com sinal); no console virou "Generic
+ * bad character file". O Fog ja recusava ponteiro acima de 0x7FFFFFFF na validacao que o patch +11690
+ * desliga. O heap do Wine 32-bit cresce pelo NtAllocateVirtualMemory do ntdll de 32 bits: o gancho no
+ * stub dele pede ZeroBits = 1 (endereco abaixo de 0x80000000) quando nao ha endereco fixo, como o
+ * Windows faz com um programa nao-LAA. Se faltar memoria baixa, cai no pedido original.
+ * ==================================================================================== */
+typedef LONG (NTAPI *NtAllocateVirtualMemory_t)(HANDLE, PVOID *, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+static NtAllocateVirtualMemory_t g_ntalloc_orig;
+static LONG g_low_fail;
+
+static LONG NTAPI low_NtAllocateVirtualMemory(HANDLE proc, PVOID *addr, ULONG_PTR zero_bits, PSIZE_T size,
+                                              ULONG type, ULONG prot)
+{
+    if (!zero_bits && addr && !*addr && proc == (HANDLE)-1) {
+        LONG st = g_ntalloc_orig(proc, addr, 1, size, type, prot);
+        if (st >= 0) return st;
+        if (InterlockedIncrement(&g_low_fail) <= 4)
+            lg("memoria abaixo de 2 GB esgotada (status %08lX, %lu KB): usando a alta", st, size ? (DWORD)(*size >> 10) : 0);
+    }
+    return g_ntalloc_orig(proc, addr, zero_bits, size, type, prot);
+}
+
+static void low_memory_hook(void)
+{
+    BYTE *stub = (BYTE *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtAllocateVirtualMemory");
+    BYTE *tramp;
+    DWORD old;
+    /* stub de syscall do wow64: mov eax,id / mov edx,abs / call edx / ret 18h (independe da posicao) */
+    if (!stub || stub[0] != 0xB8 || stub[5] != 0xBA || stub[10] != 0xFF || stub[11] != 0xD2 ||
+        stub[12] != 0xC2 || stub[13] != 0x18 || stub[14] != 0x00) {
+        lg("memoria abaixo de 2 GB: stub do NtAllocateVirtualMemory diferente do esperado, nada alterado");
+        return;
+    }
+    tramp = VirtualAlloc(NULL, 16, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return;
+    memcpy(tramp, stub, 15);
+    VirtualProtect(tramp, 16, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), tramp, 16);
+    g_ntalloc_orig = (NtAllocateVirtualMemory_t)tramp;
+    if (!VirtualProtect(stub, 5, PAGE_EXECUTE_READWRITE, &old)) return;
+    stub[0] = 0xE9;
+    *(DWORD *)(stub + 1) = (DWORD)((BYTE *)low_NtAllocateVirtualMemory - (stub + 5));
+    VirtualProtect(stub, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), stub, 5);
+    lg("memoria abaixo de 2 GB: alocacoes sem endereco fixo limitadas a 0x7FFFFFFF (programa nao-LAA)");
+}
+
+/* ======================================================================================
  * 6. notificacao de carga de modulos
  * ==================================================================================== */
 typedef struct { ULONG Flags; const UNICODE_STRING *FullDllName, *BaseDllName; PVOID DllBase; ULONG SizeOfImage; } LDR_NOTIF;
@@ -606,6 +653,44 @@ static int core_supports_d2gl(const char *core)
 }
 
 static int same_file(const char *a, const char *b);
+
+/* Mapa de memoria resumido: o que esta em uso abaixo e acima de 2 GB. */
+static void log_vm_layout(const char *tag)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    DWORD a = 0x10000, used_lo = 0, used_hi = 0, resv_hi = 0;
+    while (a < 0xFFFF0000 && VirtualQuery((void *)a, &mbi, sizeof(mbi))) {
+        DWORD base = (DWORD)mbi.BaseAddress, size = (DWORD)mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT) {
+            if (base >= 0x80000000) {
+                used_hi += size;
+                if (mbi.Type != MEM_IMAGE && size >= 0x100000)
+                    lg("  acima de 2 GB: %08lX %lu KB %s", base, size >> 10, mbi.Type == MEM_MAPPED ? "mapeada" : "privada");
+            } else used_lo += size;
+        }
+        else if (mbi.State == MEM_RESERVE && base >= 0x80000000) resv_hi += size;
+        if (base + size <= a) break;
+        a = base + size;
+    }
+    lg("memoria (%s): em uso abaixo de 2 GB %lu MB, acima de 2 GB %lu MB (+%lu MB reservados)",
+       tag, used_lo >> 20, used_hi >> 20, resv_hi >> 20);
+}
+
+/* O Median XL grava os personagens em %APPDATA%\MedianXL\save e nao cria a pasta (no Windows quem cria e o
+ * instalador). Sem ela o personagem novo nao e gravado e o jogo recusa carrega-lo: no Ryujinx o log do
+ * jogo mostrou "[PLAYER LOAD] ClientAddPlayerToGame() Error Loading:<nome> Error:14", que e o
+ * "Generic bad character file". Num console recem-instalado a pasta nao existe. */
+static void ensure_save_dir(void)
+{
+    char dir[MAX_PATH];
+    DWORD n = GetEnvironmentVariableA("APPDATA", dir, sizeof(dir));
+    if (!n || n >= sizeof(dir) - 20) { lg("APPDATA indisponivel: pasta de saves nao verificada"); return; }
+    lstrcatA(dir, "\\MedianXL");
+    CreateDirectoryA(dir, NULL);
+    lstrcatA(dir, "\\save");
+    if (CreateDirectoryA(dir, NULL)) lg("pasta de saves criada: %s", dir);
+    else if (GetLastError() != ERROR_ALREADY_EXISTS) lg("pasta de saves %s: erro %lu", dir, GetLastError());
+}
 
 /* Versoes anteriores do D2NXPad gravavam data\global\excel\charstats.bin com "gld " no kit inicial
  * (ouro inicial). O Median XL recusa o personagem criado assim ("Generic bad character file").
@@ -1019,6 +1104,8 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
         AddVectoredExceptionHandler(1, veh);
         lg("Tratador de excecoes vetorado (VEH c0000005) ativo para todos os modulos");
 
+        if (g_is_mxl && GetPrivateProfileIntA("MedianXL", "Memoria2GB", 1, g_cfg)) low_memory_hook();
+
         void *cookie = NULL;
         LdrRegisterDllNotification_t reg = (LdrRegisterDllNotification_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "LdrRegisterDllNotification");
         if (reg) {
@@ -1026,7 +1113,11 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             lg("LdrRegisterDllNotification ativo (notificacoes de modulo e pin de memoria)");
         }
 
-        if (g_is_mxl) remove_bad_charstats();
+        if (g_is_mxl) {
+            log_vm_layout("boot");
+            ensure_save_dir();
+            remove_bad_charstats();
+        }
         if (g_is_d2se || g_is_mxl) video_setup();
         th = CreateThread(NULL, 2 * 1024 * 1024, worker, NULL, 0, NULL);
         if (th) CloseHandle(th);

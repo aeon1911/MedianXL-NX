@@ -63,3 +63,41 @@
   do cabeçalho (assinatura, tamanho, checksum).
 - **`AutoCreate=1`** (`[AutoTest]`, só teste): cria personagem novo no emulador e tira screenshots (Print Screen
   do jogo) a cada passo; complementa o `AutoJoin`, que só carrega personagens existentes.
+
+### F. 23/10/2026 (tarde) — causa real do "Generic bad character file", editor de nome e teclas
+Relato do console depois da versão E: o R3 travava o mouse e os botões digitavam letras, mas o teclado não
+aparecia, e o "Generic bad character file" continuava. Tudo abaixo foi reproduzido e validado no Ryujinx
+com o `AutoCreate`, sem saves no SD de teste, como num console novo.
+- **Memória acima de 2 GB (causa do Halt/"bad character file")**: o Wine do Autorun liga
+  `WINE_LARGE_ADDRESS_AWARE` por padrão (como o Proton) e o runtime não passa variável de ambiente, então
+  o Game.exe 1.13c (não-LAA) recebe heap acima de 0x80000000. Na criação de personagem o D2Common passou ao
+  Fog o ponteiro `0xC27291D4` (pilha no `Logs/D2Debug-*.txt`) e o realloc do pool parou em
+  `Halt line #1696` (bloco "não alocado": o pool usa aritmética com sinal). O Fog já recusava ponteiro
+  acima de 0x7FFFFFFF na validação que o patch +11690 desliga. Correção no `D2Autorun`: gancho no stub do
+  `NtAllocateVirtualMemory` do ntdll de 32 bits que pede `ZeroBits = 1` quando não há endereço fixo
+  (programa não-LAA, como no Windows); sem memória baixa, cai no pedido original. Reservar o espaço alto
+  com `VirtualAlloc` não funciona (erro 487) e trocar só o `VirtualAlloc` da IAT não pega o heap.
+  `[MedianXL] Memoria2GB=0` no `d2nx\d2nx.ini` desliga. Antes: Halt em 3 de 3 testes; depois: personagem
+  criado, salvo e recarregado em todos.
+- **Pasta de saves**: o Median XL não cria `%APPDATA%\MedianXL\save` (no Windows é o instalador). Sem ela o
+  log do jogo mostra `[PLAYER LOAD] ClientAddPlayerToGame() Error Loading:<nome> Error:14`, que é o
+  "Generic bad character file". O `D2Autorun` cria a pasta no boot.
+- **Teclado do Autorun invisível com OpenGL**: o runtime desenha o teclado na troca de quadros do OpenGL
+  (`nx_osk_draw`), mas no Ryujinx ele não aparece nem num programa OpenGL mínimo (tela verde +
+  `NtUserCallHwndParam(...,30)`). O teclado abre (captura o controle) sem aparecer, que é o que o
+  usuário viu. Fica como ação `OSK` no ini; `KEYBOARD` agora é o editor de nome do D2NXPad.
+- **Editor de nome** (`[Menu]` R3/L3/−): escreve um nome sugerido na caixa do jogo e o direcional edita
+  (↑↓ avançam/voltam a última letra, → acrescenta, ← apaga, Y sorteia, + ou X cria, A/B/R3 saem). Texto por
+  `WM_CHAR` postado com contagem de repetição 1 e Backspace por `WM_KEYDOWN VK_BACK` postado, os dois na
+  mesma fila para manter a ordem. Medido no emulador, uma forma de cada vez, conferindo a caixa de nome nas
+  capturas: `WM_CHAR` com contagem 0 e o `SendInput` de letras não escrevem; `WM_CHAR 8` não apaga.
+  Teste: `Teste`, ↑, →, ←, ↓, ↓ → save `Testd.d2s`.
+- **Teclas por um caminho só**: o `tap_key` mandava cada tecla por `SendInput`, `keybd_event` e
+  `PostMessage` juntos. No Ryujinx cada um, sozinho, abre/fecha o menu do ESC dentro do jogo, então um
+  toque alternava o painel 2-3 vezes. Agora vai só por `SendInput` (+ `WM_CHAR` para letras/dígitos); o
+  `+` abre o menu e o Save and Exit funciona no teste.
+- **Diagnóstico de Halt**: o `D2Autorun` rotulava todo Halt como "#904 / falta de memória"; agora só o
+  #904 recebe esse texto, e o log mostra o uso de memória abaixo/acima de 2 GB.
+- Correções à seção E: a injeção chega, sim, à caixa de nome (só precisava de contagem 1). O `charstats.bin`
+  com ouro era uma causa real no PC, mas no console a falha continuava por causa da memória alta e da
+  pasta de saves.

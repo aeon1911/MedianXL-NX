@@ -39,24 +39,31 @@ Repositório remoto: https://github.com/aeon1911/MedianXL-NX (branch `main`). Fa
 Confirmado pelo usuário no console (antes desta sessão): boot até o jogo, memória (Title Override), 16:9,
 cursor sem salto ao apertar A/X/Y (só `PostMessageA`), cursor oculto em gameplay.
 
-Feito nesta sessão (validado em PC/Ryujinx, **aguardando teste no console**):
-- **"Generic bad character file"**: causa = o menu de gameplay in-game do D2NXPad regravava
-  `data/global/excel/charstats.bin` com `gld ` no kit inicial (o Antigravity só tirou do script Python).
-  Com essa tabela o personagem novo trava no D2Sigma ao entrar (reproduzido no PC). Agora: menu não gera,
-  `D2Autorun` apaga no boot (log "charstats.bin com ouro inicial (gld) encontrado: removido", testado no Ryujinx).
-  Ouro inicial ficou indisponível.
-- **R3/L3/− no `[Menu]` = `KEYBOARD`**: abre o teclado do Autorun (`NtUserCallHwndParam(hwnd,0,30)`), validado no
-  Ryujinx (`[OSK] opened by the program`). Injeção de teclas do D2NXPad NÃO chega à caixa de nome no Wine-NX.
-- `−` no menu não manda mais ESC; botões apertados ao fechar o teclado ficam travados até soltar.
-- Saves do Median ficam em `drive_c/users/steamuser/AppData/Roaming/MedianXL/save` (não `DiabloII/save`);
-  `d2nxpad.log` lista cada save e se o cabeçalho é válido.
+Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalhes em `docs/D2PAD_CHANGES.md` E/F:
+- **"Generic bad character file"** tinha 3 causas: (1) o Wine do Autorun força LAA (`WINE_LARGE_ADDRESS_AWARE`
+  ligado por padrão) e o heap do Fog ia para 0xC2xxxxxx → Halt #1696 na criação. Corrigido com gancho no stub
+  do `NtAllocateVirtualMemory` 32-bit (`ZeroBits=1`, `low_memory_hook` no d2autorun.c; `[MedianXL] Memoria2GB=0`
+  desliga). (2) O Median XL não cria `%APPDATA%\MedianXL\save` → `Error Loading ... Error:14`; o D2Autorun cria.
+  (3) `charstats.bin` com `gld ` gravado pelo menu de gameplay (removido no boot; ouro inicial indisponível).
+- O teclado do Autorun (`NtUserCallHwndParam(hwnd,0,30)`) **abre mas não aparece** com OpenGL (nem num app GL
+  mínimo). R3/L3/− no `[Menu]` = **editor de nome** do D2NXPad (texto na própria caixa do jogo). Ação `OSK`
+  mantém o teclado do Autorun.
+- Injeção de teclas no Wine-NX (medido): texto = `WM_CHAR` postado com lParam 1 (contagem 0 é ignorada);
+  apagar = `WM_KEYDOWN VK_BACK` (WM_CHAR 8 não apaga); SendInput/keybd_event/PostMessage de WM_KEYDOWN
+  funcionam para teclas do jogo — usar UM caminho só (antes os 3 juntos alternavam painéis 2-3 vezes).
+  Mensagens postadas são entregues antes da entrada do SendInput (não misturar na mesma sequência).
+- `−` no menu não manda ESC; saves ficam em `drive_c/users/steamuser/AppData/Roaming/MedianXL/save`
+  (`d2nxpad.log` lista cada save).
 
 ## Testes
 - `./tools/run_fase3_ryujinx_test.sh`: regressão (AutoJoin carrega Barbaro/Reunow, AutoWalk anda 30 s).
-- `tools/run_ryujinx_fresh_test.sh`: `AutoCreate=1` (cria personagem; exige que não haja saves em
-  `.../AppData/Roaming/MedianXL` do SD de teste — backup em `build/ryujinx-test-saves-backup-20261023/`).
-  Tira screenshots com Print Screen do jogo em `drive_c/DiabloII/Screenshots/` (único jeito de "ver" o emulador).
-  Limitação: digitar o nome não funciona por injeção; a criação completa no emulador não foi automatizada.
+- `tools/run_ryujinx_fresh_test.sh`: `AutoCreate=1` — cria personagem com o editor de nome (esperado `Testd`),
+  entra, Save and Exit, recarrega (`SUCESSO 2/2`). Tira os saves de teste do SD e devolve no fim
+  (`EMPTYDIR=1` cria a pasta save vazia; sem ele simula console novo). Captura a janela do Ryujinx com
+  `xprop` + `import -window` em `build/fresh-test-shots/` (o Print Screen do jogo não mostra o menu do ESC).
+- O log do próprio jogo (`drive_c/DiabloII/Logs/D2Debug-*.txt`) tem Halts com despejo de pilha e erros de
+  carga de personagem — foi o que mostrou o ponteiro acima de 2 GB e o `Error:14`.
+- Código-fonte do runtime Autorun/Wine-NX: `build/autorun-src` (ntdll/win32u/wine-nx-probe).
 - Harness PC (Wine + Xvfb em Docker `d2-mxl-tester`, sem tocar no desktop): `build/pc-repro/run.sh` + `x.sh`
   (xdotool + screenshot). Cópia reflink da árvore do SD em `build/pc-repro/DiabloII`.
 - Nos menus o D2GL converte o mouse como 4:3 (960x720 centralizado) mas desenha esticado 16:9:
