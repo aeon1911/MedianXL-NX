@@ -38,12 +38,18 @@ def validate_tree():
     wine_dir = os.path.join(SWITCH_DIR, "wine")
 
     # Arquivos obrigatorios
+    autorun_dir = os.path.join(SWITCH_DIR, "d2-autorun")
     mandatory = [
+        os.path.join(autorun_dir, "d2-autorun.nro"),
+        os.path.join(autorun_dir, "catalog.json"),
+        os.path.join(autorun_dir, "root.txt"),
         os.path.join(wine_dir, "wine-nx-runtime.nro"),
         os.path.join(wine_dir, "run-next.txt"),
         os.path.join(wine_dir, "target.txt"),
         os.path.join(wine_dir, "launcher-library.txt"),
         os.path.join(wine_dir, "launcher-library-v2.ini"),
+        os.path.join(wine_dir, "drive_c/autorun-setup.exe"),
+        os.path.join(wine_dir, "drive_c/windows/syswow64/crtdll.dll"),
         os.path.join(d2_dir, "Game.exe"),
         os.path.join(d2_dir, "Game.args.txt"),
         os.path.join(d2_dir, "Game.wine-nx.txt"),

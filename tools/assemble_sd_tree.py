@@ -240,6 +240,48 @@ def patch_wine_registry(reg_dir):
             f.write(content)
         log(f"  Registro {os.path.basename(reg_file)} atualizado.")
 
+def deploy_autorun_frontend(target_switch):
+    """Copia o frontend homebrew d2-autorun (NRO, catalog, root.txt) e a infraestrutura Wine."""
+    src_autorun = os.path.join(BASE_DIR, "sd-card/switch/d2-autorun")
+    dst_autorun = os.path.join(target_switch, "d2-autorun")
+    if os.path.exists(src_autorun):
+        log(f"Copiando frontend d2-autorun para {dst_autorun}...")
+        os.makedirs(dst_autorun, exist_ok=True)
+        for item in os.listdir(src_autorun):
+            s = os.path.join(src_autorun, item)
+            d = os.path.join(dst_autorun, item)
+            if os.path.isfile(s):
+                shutil.copy2(s, d)
+
+    src_wine = os.path.join(BASE_DIR, "sd-card/switch/wine")
+    dst_wine = os.path.join(target_switch, "wine")
+    os.makedirs(dst_wine, exist_ok=True)
+
+    # 1. autorun-setup.exe
+    setup_src = os.path.join(src_wine, "drive_c/autorun-setup.exe")
+    setup_dst = os.path.join(dst_wine, "drive_c/autorun-setup.exe")
+    if os.path.exists(setup_src):
+        os.makedirs(os.path.dirname(setup_dst), exist_ok=True)
+        shutil.copy2(setup_src, setup_dst)
+
+    # 2. drive_c/windows
+    win_src = os.path.join(src_wine, "drive_c/windows")
+    win_dst = os.path.join(dst_wine, "drive_c/windows")
+    if os.path.exists(win_src):
+        shutil.copytree(win_src, win_dst, dirs_exist_ok=True)
+
+    # 3. pastas de suporte (config, licenses, registry, share)
+    for folder in ["config", "licenses", "registry", "share"]:
+        fs = os.path.join(src_wine, folder)
+        fd = os.path.join(dst_wine, folder)
+        if os.path.exists(fs):
+            shutil.copytree(fs, fd, dirs_exist_ok=True)
+
+    # 4. args.txt
+    args_src = os.path.join(src_wine, "args.txt")
+    if os.path.exists(args_src):
+        shutil.copy2(args_src, os.path.join(dst_wine, "args.txt"))
+
 def create_ryu_case_symlinks(d2_dir):
     """Cria symlinks para compatibilidade com sistema de arquivos case-sensitive no Ryujinx."""
     variants = {
@@ -275,7 +317,12 @@ def create_ryu_case_symlinks(d2_dir):
 
 def main():
     log("=== Iniciando montagem da arvore SD final ===")
+    DIST_SWITCH = os.path.join(BASE_DIR, "dist/sd-card/switch")
+    RYU_SWITCH = os.path.join(BASE_DIR, "build/ryujinx-test/sdcard/switch")
+    ROOT_SWITCH = os.path.join(BASE_DIR, "sd-card/switch")
+
     # 1. Montar em dist/sd-card
+    deploy_autorun_frontend(DIST_SWITCH)
     clean_obsolete(DIST_D2)
     deploy_game_files(DIST_D2)
     configure_launcher(DIST_WINE)
@@ -284,6 +331,7 @@ def main():
     # 2. Sincronizar em build/ryujinx-test
     if os.path.exists(RYU_WINE):
         log("Sincronizando arvore de teste com o Ryujinx...")
+        deploy_autorun_frontend(RYU_SWITCH)
         clean_obsolete(RYU_D2)
         deploy_game_files(RYU_D2)
         create_ryu_case_symlinks(RYU_D2)
@@ -291,7 +339,7 @@ def main():
         patch_wine_registry(os.path.join(RYU_WINE, "registry"))
 
     # 3. Sincronizar em sd-card/
-    ROOT_WINE = os.path.join(BASE_DIR, "sd-card/switch/wine")
+    ROOT_WINE = os.path.join(ROOT_SWITCH, "wine")
     ROOT_D2 = os.path.join(ROOT_WINE, "drive_c/DiabloII")
     if os.path.exists(ROOT_WINE):
         log("Sincronizando arvore sd-card/ raiz...")
