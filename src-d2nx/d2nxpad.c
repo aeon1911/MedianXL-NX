@@ -69,6 +69,7 @@ static int readable(DWORD addr, DWORD size)
 }
 static DWORD rd32(DWORD addr) { return readable(addr, 4) ? *(volatile DWORD *)addr : 0; }
 static WORD rd16(DWORD addr) { return readable(addr, 2) ? *(volatile WORD *)addr : 0; }
+static BYTE rd8(DWORD addr) { return readable(addr, 1) ? *(volatile BYTE *)addr : 0; }
 
 /* ======================================================================================
  * configuracao
@@ -95,7 +96,9 @@ static struct {
     int nav_step, nav_delay, nav_rate;
     int panel_shift;
     int skill_delay_ms;
-    int autojoin, autowalk, autocreate, cursortest, menutest, itemtest, item_x, item_y, readtest, item_delay;
+    int autojoin, autowalk, autocreate, cursortest, menutest, itemtest, item_x, item_y, readtest, item_delay, walktest;
+    int move_mode;
+    float walk_noise;
     float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
     int start_gold;
 } cfg;
@@ -332,6 +335,7 @@ static DWORD ini_hex(const char *sec, const char *key, DWORD def)
 
 static void init_gameplay_menu_indices(void);
 
+static void script_load_ini(void);
 static void load_config(void)
 {
     int c, b;
@@ -381,6 +385,10 @@ static void load_config(void)
     cfg.item_x = ini_int("AutoTest", "ItemX", 0);
     cfg.item_y = ini_int("AutoTest", "ItemY", 0);
     cfg.item_delay = ini_int("AutoTest", "ItemDelay", 10000);
+    cfg.walktest = ini_int("AutoTest", "WalkTest", 0);
+    script_load_ini();
+    cfg.walk_noise = ini_float("AutoTest", "RuidoAnalogico", 0.0f);
+    cfg.move_mode = ini_int("Movimento", "ModoOrdem", 1);
     if (cfg.autocreate) cfg.autojoin = 0;   /* AutoCreate faz o proprio caminho pelos menus */
     if (cfg.autojoin || cfg.autowalk || cfg.autocreate)
         lg("AutoTest ativo: autojoin=%d autowalk=%d autocreate=%d", cfg.autojoin, cfg.autowalk, cfg.autocreate);
@@ -1219,8 +1227,28 @@ static void end_attack(Hold *h)
     (void)h;
     InterlockedExchange(&g_mv_busy, 0);
 }
+/* interacao pendente: o B foi solto antes de o heroi chegar ao alvo */
+static DWORD g_pend_unit, g_pend_t;
+static void pending_interact_tick(void)
+{
+    int i;
+    if (!g_pend_unit) return;
+    if (GetTickCount() - g_pend_t > 4000 || g_mode != M_GAME) { g_pend_unit = 0; return; }
+    for (i = 0; i < g_nunits; i++)
+        if (g_units[i].unit == g_pend_unit) {
+            float d = sqrtf((g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py));
+            if (d <= 3.0f) {
+                native_queue(NC_INTERACT, rd32(g_pend_unit), unit_id(g_pend_unit));
+                dbg("interagir: alvo a %.1f, comando enviado (depois de soltar)", d);
+                g_pend_unit = 0;
+            }
+            return;
+        }
+    g_pend_unit = 0;
+}
 static void begin_interact(Hold *h)
 {
+    g_pend_unit = 0;
     Target t = find_target(0, 1);
     h->stage = 2;
     h->shift = 0;
@@ -1423,6 +1451,9 @@ static void stop_action(int b)
     if (!h->active) return;
     switch (h->act.kind) {
     case A_ATTACK: case A_RIGHT: end_attack(h); break;
+    case A_INTERACT:   /* soltou antes de chegar: a interacao continua sozinha (um toque no B basta) */
+        if (h->stage == 2 && h->unit && !h->shift) { g_pend_unit = h->unit; g_pend_t = GetTickCount(); }
+        break;
     case A_SKILL: if (h->stage) end_attack(h); break;
     case A_HOLD: send_key(h->act.vk, 0); key_mods(h->act.mods, 0); break;
     default: break;
@@ -1880,8 +1911,69 @@ static void draw_cheat_menu(void)
         pDrawText(g_menu_status, x, y + lh * (MENU_ITEM_COUNT + 2) + 4, 4, 0);
 }
 
+static volatile LONG g_walk_log;     /* WalkTest: registra cada quadro */
 #define MOVE_REACH 7.0f      /* subtiles a frente do heroi a cada ordem de movimento */
 #define MOVE_REPEAT_MS 130   /* intervalo entre ordens enquanto o analogico estiver inclinado */
+
+/* Ordem de movimento estavel (ModoOrdem=1). O jogo guarda a direcao do heroi em 64 passos de 5,625 graus,
+ * arredondando para baixo a partir de 45 graus no mundo: dir = floor((atan2(dy,dx) - 45) / 5,625), medido no
+ * Ryujinx (WalkTest). As 8 direcoes principais do analogico caem exatamente na fronteira entre duas direcoes:
+ * com o alvo a 5 subtiles, recalculado a cada 130 ms, o desvio de meio passo do proprio caminho fazia a
+ * direcao alternar (31/32...) a cada passo do jogo e o sprite trocava de lado: a "tremida/passinhos".
+ * Agora a direcao do analogico e encaixada no CENTRO de uma das 64 direcoes (com histerese), o alvo fica a
+ * MV_REACH subtiles exatamente nessa direcao (ponto inteiro com menor erro de angulo) e a ordem so e
+ * renovada quando a direcao muda, o alvo fica perto, o heroi para ou anda/corre muda. */
+#define MV_REACH 18.0f
+#define MV_RENEW 9.0f
+#define DEG(r) ((r) * 57.29577951f)
+#define RAD(d) ((d) * 0.01745329252f)
+static int g_mv_bin = -1;
+static float g_sm_x, g_sm_y;             /* direcao do analogico suavizada */
+static int g_sm_on;
+static int g_mv_tx, g_mv_ty;          /* ultimo alvo mandado (diagnostico) */
+static void move_frame(DWORD player, float px, float py, DWORD now, DWORD *last_mv)
+{
+    static float tgx, tgy, lpx, lpy;
+    static int last_run = -1;
+    static DWORD still_t;
+    float f = (DEG(atan2f(g_mv_wy, g_mv_wx)) - 45.0f) / 5.625f, d;
+    DWORD m = rd32(player + U_MODE);
+    int need = 0, bin;
+    while (f < 0) f += 64.0f;
+    while (f >= 64.0f) f -= 64.0f;
+    bin = g_mv_bin;
+    if (bin >= 0) {                                      /* histerese */
+        d = f - (bin + 0.5f);
+        while (d > 32) d -= 64;
+        while (d < -32) d += 64;
+        if (fabsf(d) > 1.0f) bin = -1;               /* troca so com meia direcao (2,8 graus) alem da borda */
+    }
+    if (bin < 0) { bin = (int)f & 63; need = 1; }
+    if ((int)g_mv_run != last_run) need = 1;
+    if ((tgx - px) * (tgx - px) + (tgy - py) * (tgy - py) < MV_RENEW * MV_RENEW) need = 1;
+    if (m != 2 && m != 3 && m != 6 && now - *last_mv > 150) need = 1;        /* parou (fim do caminho/bloqueio) */
+    if (px != lpx || py != lpy) { lpx = px; lpy = py; still_t = now; }
+    else if (now - still_t > 300 && now - *last_mv > 300) need = 1;          /* preso */
+    if (!need) return;
+    {
+        float a = RAD(45.0f + (bin + 0.5f) * 5.625f), ca = cosf(a), sa = sinf(a), best = 1e9f;
+        int ix, iy, bx = 0, by = 0;
+        float cx = px + ca * MV_REACH, cy = py + sa * MV_REACH;
+        for (ix = -2; ix <= 2; ix++)
+            for (iy = -2; iy <= 2; iy++) {
+                float qx = floorf(cx) + ix, qy = floorf(cy) + iy, vx = qx - px, vy = qy - py;
+                float l = sqrtf(vx * vx + vy * vy), e = fabsf(vx * sa - vy * ca) / (l > 1 ? l : 1);
+                if (e < best) { best = e; bx = (int)qx; by = (int)qy; }
+            }
+        tgx = (float)bx; tgy = (float)by;
+        do_command(player, (DWORD)bx, (DWORD)by, g_mv_run ? NC_RUN : NC_WALK);
+        g_mv_tx = bx; g_mv_ty = by;
+        g_mv_bin = bin;
+        last_run = (int)g_mv_run;
+        *last_mv = now;
+        still_t = now;
+    }
+}
 
 /* Um quadro do jogo, na thread do jogo: comandos nativos, movimento, mensagens e menu. */
 static void game_frame(void)
@@ -1897,19 +1989,35 @@ static void game_frame(void)
         InterlockedExchange(&g_natq_tail, g_natq_tail + 1);
         if (player) do_command(player, c.a, c.b, (DWORD)c.cmd);
     }
-    if (player && g_mv_active && !g_mv_busy) {
+    if (player && g_mv_active && !g_mv_busy && cfg.move_mode == 0) {      /* ordem antiga (ModoOrdem=0) */
         if (now - last_mv >= MOVE_REPEAT_MS && unit_pos(player, 0, &px, &py)) {
             float tx = px + g_mv_wx * MOVE_REACH, ty = py + g_mv_wy * MOVE_REACH;
             do_command(player, (DWORD)(tx + 0.5f), (DWORD)(ty + 0.5f), g_mv_run ? NC_RUN : NC_WALK);
+            g_mv_tx = (int)(tx + 0.5f); g_mv_ty = (int)(ty + 0.5f);
             last_mv = now;
             was_moving = 1;
         }
+    } else if (player && g_mv_active && !g_mv_busy) {
+        if (unit_pos(player, 0, &px, &py)) move_frame(player, px, py, now, &last_mv);
+        was_moving = 1;
     } else if (was_moving) {
         /* analogico solto: ordem de andar ate onde o heroi esta = para ali (o ataque tem prioridade) */
         if (player && !g_mv_busy && unit_pos(player, 0, &px, &py))
             do_command(player, (DWORD)(px + 0.5f), (DWORD)(py + 0.5f), NC_WALK);
         was_moving = 0;
         last_mv = 0;
+        g_mv_bin = -1;
+    }
+    if (cfg.walktest && player && g_walk_log) {
+        DWORD path = rd32(player + U_PATH);
+        lg("[WF] %lu pos %u.%05u,%u.%05u modo %lu gfx %lu dir %u alvo %u,%u mv %ld ordem %d,%d",
+           now, rd16(path + 2), rd16(path), rd16(path + 6), rd16(path + 4), rd32(player + U_MODE),
+           rd32(player + 0x44), rd8(path + 0x64), rd16(path + 0x10), rd16(path + 0x12), (long)g_mv_active, g_mv_tx, g_mv_ty);
+        if (cfg.walktest > 1) {
+            char b[700]; int o = 0, k;
+            for (k = 0x08; k < 0xC0; k += 4) o += snprintf(b + o, sizeof(b) - o, "%02X:%lX ", k, rd32(path + k));
+            lg("[WP] %s", b);
+        }
     }
     drain_msgq();
     if (g_gp_menu.open) draw_cheat_menu();
@@ -2162,6 +2270,108 @@ static void autowalk_acceptance(DWORD t)
     }
 }
 
+/* AutoTest Script=<arquivo>: roteiro de teste que aperta os botoes do controle pelo mesmo caminho do XInput
+ * (para testar menus/loja/inventario no emulador). Um comando por linha, depois que o personagem entra:
+ *   wait <ms> | pad <Botao> [ms] | stick <lx> <ly> <ms> | rstick <rx> <ry> <ms> | key <TECLA> | move <x> <y>
+ *   click | rclick | npc [cls] (anda ate o NPC mais perto e aperta B) | waitpanel <id hex> <ms> | mark <texto> | log */
+static struct {
+    char lines[200][80]; int n, i, on;
+    DWORD until, hold_until; int hold_b; float lx, ly, rx, ry; int npc, npc_cls; DWORD npc_t0;
+} g_scr;
+static void script_load(const char *rel)
+{
+    char path[MAX_PATH]; FILE *f; char l[120];
+    snprintf(path, sizeof(path), "%s%s", g_dir, rel);
+    f = fopen(path, "rb");
+    if (!f) { lg("[Script] nao abriu %s", path); return; }
+    while (g_scr.n < 200 && fgets(l, sizeof(l), f)) {
+        char *e = l + strlen(l);
+        while (e > l && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0;
+        if (l[0] && l[0] != '#') lstrcpynA(g_scr.lines[g_scr.n++], l, 80);
+    }
+    fclose(f);
+    g_scr.hold_b = -1;
+    lg("[Script] %d comandos de %s", g_scr.n, path);
+}
+static void script_load_ini(void)
+{
+    char sc[MAX_PATH];
+    GetPrivateProfileStringA("AutoTest", "Script", "", sc, sizeof(sc), g_ini);
+    if (sc[0]) { script_load(sc); g_scr.on = g_scr.n > 0; }
+}
+static int btn_from_name(const char *n)
+{
+    int b;
+    for (b = 0; b < B_COUNT; b++) if (!lstrcmpiA(n, btn_names[b])) return b;
+    return -1;
+}
+static void script_log_state(const char *tag)
+{
+    int mx = -1, my = -1, k; char b[200] = "";
+    game_mouse(&mx, &my);
+    for (k = 1; k < UI_MAX; k++) if (ui_open(k)) snprintf(b + strlen(b), sizeof(b) - strlen(b), " %02X", k);
+    lg("[Script] %s: mouse jogo %d,%d cursor %.0f,%.0f paineis%s", tag, mx, my, g_curx, g_cury, b[0] ? b : " nenhum");
+}
+static void script_tick(void)
+{
+    DWORD now = GetTickCount();
+    if (!g_scr.on) return;
+    if (g_scr.hold_b >= 0) {
+        if (now < g_scr.hold_until) g_pad.down[g_scr.hold_b] = 1;
+        else g_scr.hold_b = -1;
+    }
+    if (now < g_scr.hold_until && (g_scr.lx || g_scr.ly || g_scr.rx || g_scr.ry)) {
+        g_pad.lx = g_scr.lx; g_pad.ly = g_scr.ly; g_pad.rx = g_scr.rx; g_pad.ry = g_scr.ry;
+    } else { g_scr.lx = g_scr.ly = g_scr.rx = g_scr.ry = 0; }
+    g_pad.connected = 1;
+    if (g_scr.npc) {                                       /* anda ate o NPC mais perto e interage */
+        int i, best = -1; float bd = 1e9f, lx = 0, ly = 0;
+        for (i = 0; i < g_nunits; i++)
+            if (g_units[i].type == 1 && (g_units[i].flags & 0x2) && !monster_is_ally(&g_units[i]) &&
+                (!g_scr.npc_cls || g_units[i].cls == g_scr.npc_cls)) {
+                float d = (g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py);
+                if (d < bd) { bd = d; best = i; }
+            }
+        if (best >= 0 && bd > 25.0f && now - g_scr.npc_t0 < 20000) {
+            stick_toward(g_units[best].x, g_units[best].y, &lx, &ly);
+            g_pad.lx = lx; g_pad.ly = ly;
+            return;
+        }
+        lg("[Script] npc: cls %d a %.1f", best >= 0 ? g_units[best].cls : -1, sqrtf(bd));
+        g_scr.npc = 0;
+        g_scr.hold_b = B_B; g_scr.hold_until = now + 200; g_scr.until = now + 1500;
+        return;
+    }
+    if (now < g_scr.until) return;
+    if (g_scr.i >= g_scr.n) { lg("[Script] fim"); g_scr.on = 0; return; }
+    {
+        char c[80], a1[40] = "", a2[40] = "", a3[40] = "";
+        const char *l = g_scr.lines[g_scr.i++];
+        sscanf(l, "%79s %39s %39s %39s", c, a1, a2, a3);
+        lg("[Script] > %s", l);
+        g_scr.until = now + 50;
+        if (!lstrcmpiA(c, "wait")) g_scr.until = now + atoi(a1);
+        else if (!lstrcmpiA(c, "pad")) {
+            int b = btn_from_name(a1), ms = a2[0] ? atoi(a2) : 150;
+            if (b >= 0) { g_scr.hold_b = b; g_scr.hold_until = now + ms; g_scr.until = now + ms + 250; }
+        } else if (!lstrcmpiA(c, "stick") || !lstrcmpiA(c, "rstick")) {
+            int ms = atoi(a3);
+            if (c[0] == 's' || c[0] == 'S') { g_scr.lx = (float)atof(a1); g_scr.ly = (float)atof(a2); }
+            else { g_scr.rx = (float)atof(a1); g_scr.ry = (float)atof(a2); }
+            g_scr.hold_until = now + ms; g_scr.until = now + ms + 100;
+        } else if (!lstrcmpiA(c, "key")) { int vk = key_from_name(a1); if (vk) tap_key(vk, 0); g_scr.until = now + 300; }
+        else if (!lstrcmpiA(c, "move")) { move_cursor((float)atof(a1), (float)atof(a2)); g_scr.until = now + 200; }
+        else if (!lstrcmpiA(c, "click")) { click(0, 0); g_scr.until = now + 300; }
+        else if (!lstrcmpiA(c, "rclick")) { click(1, 0); g_scr.until = now + 300; }
+        else if (!lstrcmpiA(c, "npc")) { g_scr.npc = 1; g_scr.npc_cls = atoi(a1); g_scr.npc_t0 = now; }
+        else if (!lstrcmpiA(c, "waitpanel")) {
+            int id = (int)strtol(a1, NULL, 16); DWORD t = atoi(a2);
+            if (!ui_open(id) && t > 100) { snprintf(g_scr.lines[--g_scr.i], 80, "waitpanel %s %lu", a1, t - 100); g_scr.until = now + 100; }
+        } else if (!lstrcmpiA(c, "mark")) { lg("[Script] MARCA %s", l + 5); script_log_state("estado"); g_scr.until = now + 1200; }
+        else if (!lstrcmpiA(c, "log")) script_log_state("estado");
+    }
+}
+
 static void tick(float dt)
 {
     int b, ctx, mode, editing;
@@ -2173,6 +2383,7 @@ static void tick(float dt)
         d2nx_install_hook();
     }
     poll_pad();
+    if (g_scr.on && g_player) script_tick();
     {   /* Caixa de chat aberta sem pedido. Um Enter que ficou na fila do jogo durante o carregamento
          * (o + / X que entrou no jogo) abria o chat segundos depois de entrar, e com o chat aberto o heroi
          * nao anda: era o "anda dois passos e congela" (reproduzido no Ryujinx: chat ABERTO com o
@@ -2188,7 +2399,7 @@ static void tick(float dt)
         }
     }
     fg = GetForegroundWindow();
-    if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest) {
+    if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest && !cfg.walktest && !g_scr.on) {
         DWORD pid = 0;
         GetWindowThreadProcessId(fg, &pid);
         if (pid && pid != GetCurrentProcessId()) {
@@ -2204,7 +2415,7 @@ static void tick(float dt)
             }
         }
     }
-    if (!g_pad.connected && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest) { if (g_mode != M_IDLE) { release_all(); g_mode = M_IDLE; } return; }
+    if (!g_pad.connected && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest && !cfg.walktest && !g_scr.on) { if (g_mode != M_IDLE) { release_all(); g_mode = M_IDLE; } return; }
     if (g_nregions && GetTickCount() - g_regions_tick > 2000) { g_nregions = 0; g_regions_tick = GetTickCount(); }
     g_player = player_unit();
     read_resolution();
@@ -2426,6 +2637,29 @@ static void tick(float dt)
     }
 
 
+    if (cfg.walktest && mode == M_GAME) {
+        /* AutoTest WalkTest=1: 16 direcoes (22,5 graus), 2 s indo e 2 s voltando em cada; registra cada quadro
+         * (posicao, modo, quadro da animacao, direcao e alvo do caminho) para medir passos/tremidas. */
+        static DWORD t0; static int seg = -1;
+        DWORD now = GetTickCount(), t;
+        if (!t0) t0 = now;
+        t = now - t0;
+        if (t >= 8000) {
+            int k = (int)((t - 8000) / 4500), part = (int)((t - 8000) % 4500);
+            if (k < 16) {
+                float a = k * 3.14159265f / 8.0f, sgn = part < 2000 ? 1.0f : part < 4000 ? -1.0f : 0.0f;
+                float nx = 0, ny = 0;
+                if (cfg.walk_noise > 0) { nx = ((rand() % 2001) - 1000) / 1000.0f * cfg.walk_noise; ny = ((rand() % 2001) - 1000) / 1000.0f * cfg.walk_noise; }
+                if (k * 3 + (part < 2000 ? 0 : part < 4000 ? 1 : 2) != seg) {
+                    seg = k * 3 + (part < 2000 ? 0 : part < 4000 ? 1 : 2);
+                    lg("[WalkTest] segmento %d angulo %d %s", k, k * 225 / 10, part < 2000 ? "ida" : part < 4000 ? "volta" : "parado");
+                }
+                InterlockedExchange(&g_walk_log, 1);
+                g_pad.connected = 1;
+                g_pad.lx = sgn ? sgn * cosf(a) + nx : 0; g_pad.ly = sgn ? sgn * sinf(a) + ny : 0;
+            } else if (g_walk_log) { InterlockedExchange(&g_walk_log, 0); lg("[WalkTest] fim"); }
+        }
+    }
     if (cfg.menutest && mode == M_GAME) {
         /* AutoTest MenuTest=1: pelos botoes, como o jogador: ZL+- abre, baixo, direita, A aplica, B fecha */
         static DWORD t_in;
@@ -2540,6 +2774,10 @@ static void tick(float dt)
         }
     }
 
+    if (mode == M_GAME) {
+        if (g_pend_unit && sqrtf(g_pad.lx * g_pad.lx + g_pad.ly * g_pad.ly) > cfg.dz_left) g_pend_unit = 0;  /* mexeu: cancela */
+        pending_interact_tick();
+    }
     /* movimento: analogico esquerdo -> direcao no mundo -> rotina de comando do jogo (camada nativa).
      * Nenhum mouse/cursor/clique. Zona morta configuravel; a inclinacao e limitada a 1 (diagonal do
      * quadrado nao passa da velocidade das direcoes retas); inclinacao leve anda, forte corre. */
@@ -2553,12 +2791,21 @@ static void tick(float dt)
         if (m > cfg.dz_left) {
             float k = m > 1.0f ? 1.0f : m, inten = (k - cfg.dz_left) / (1.0f - cfg.dz_left);
             float sx = lx / m, sy = ly / m;                        /* direcao na tela (y para baixo) */
-            float wx = sx / 16.0f + sy / 8.0f, wy = sy / 8.0f - sx / 16.0f, wl = sqrtf(wx * wx + wy * wy);
+            float wx, wy, wl, sl;
+            /* suaviza a direcao (o analogico de verdade nunca fica parado; sem isso a direcao pulava entre
+             * duas das 64 direcoes do jogo); uma virada grande passa direto */
+            if (g_sm_on && g_sm_x * sx + g_sm_y * sy > 0.7f) { g_sm_x = g_sm_x * 0.75f + sx * 0.25f; g_sm_y = g_sm_y * 0.75f + sy * 0.25f; }
+            else { g_sm_x = sx; g_sm_y = sy; g_sm_on = 1; }
+            sl = sqrtf(g_sm_x * g_sm_x + g_sm_y * g_sm_y);
+            if (sl > 1e-4f) { sx = g_sm_x / sl; sy = g_sm_y / sl; }
+            wx = sx / 16.0f + sy / 8.0f; wy = sy / 8.0f - sx / 16.0f; wl = sqrtf(wx * wx + wy * wy);
             g_mv_wx = wx / wl; g_mv_wy = wy / wl;                  /* tela isometrica -> mundo */
-            InterlockedExchange(&g_mv_run, inten >= cfg.run_at);
+            /* andar/correr com histerese: perto do limite a passada nao fica alternando */
+            InterlockedExchange(&g_mv_run, g_mv_run ? inten >= cfg.run_at - 0.10f : inten >= cfg.run_at);
             InterlockedExchange(&g_mv_active, 1);
         } else {
             InterlockedExchange(&g_mv_active, 0);
+            g_sm_on = 0;
         }
         /* analogico direito: so a direcao de mira (ataque/habilidade sem alvo); o cursor fica oculto */
     } else {
