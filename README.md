@@ -64,8 +64,9 @@ Cada passo também pode ser rodado sozinho, na mesma ordem.
 
 Controles (detalhes no [INSTALL.md](INSTALL.md), regras de projeto no [RULES.md](RULES.md)):
 analógico esquerdo anda/corre, **A** ataca o monstro detectado, **X** habilidade direita, **B** interage,
-**Y** inventário, **+** menu do jogo, **ZL + −** menu de cheats. Na criação de personagem, **R3** abre o editor
-de nome.
+**Y** inventário, **+** menu do jogo, **ZL + −** menu de cheats. Nos painéis (inventário, baú, loja, menu do NPC)
+o **direcional** pula de item em item; na loja, **A** num item abre o Sim/Não com o cursor no Sim; o botão
+**Organizar** ao lado do inventário arruma tudo na hora. Na criação de personagem, **R3** abre o editor de nome.
 
 ## 📁 Repositório
 
@@ -97,8 +98,10 @@ de nome.
 Os scripts `tools/run_*_ryujinx.sh` rodam o SD de teste em `build/ryujinx-test` no Ryujinx e avaliam pelos logs:
 `run_acceptance_ryujinx.sh` (movimento nativo, A/X/B, menu de cheats — 17 critérios),
 `run_fase3_ryujinx_test.sh` (carrega um personagem e anda), `run_ryujinx_fresh_test.sh` (cria personagem do zero,
-salva e recarrega) e `run_item_test_ryujinx.sh` (usa o item de 1.500 de ouro do kit inicial e confere a leitura
-dos sons do MPQ).
+salva e recarrega), `run_item_test_ryujinx.sh` (usa o item de 1.500 de ouro do kit inicial e confere a leitura
+dos sons do MPQ), `run_menus_ryujinx.sh` (direcional no inventário, NPC, loja com Sim/Não e Organizar — 16 critérios)
+e `run_walk_test_ryujinx.sh` (suavidade do movimento em 16 direções). `run_script_ryujinx.sh` roda qualquer roteiro
+de botões (`tools/roteiros/`).
 
 ## ⚖️ Aviso legal
 

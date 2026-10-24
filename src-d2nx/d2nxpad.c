@@ -128,6 +128,8 @@ static const char *default_ini =
 "Debug=0\n"
 "\n"
 "[Movimento]\n"
+"; 1 = ordem estavel no centro das 64 direcoes do jogo (sem tremer nas diagonais); 0 = ordem antiga\n"
+"ModoOrdem=1\n"
 "ZonaMortaEsquerda=0.20\n"
 "; distancia do ponto de andar, em pixels do jogo\n"
 "RaioAndar=120\n"
@@ -215,7 +217,9 @@ static const char *default_ini =
 "Left=KEY:K\n"
 "Right=KEY:ENTER\n"
 "\n"
-"; inventario, bau, cubo, loja, troca, mercenario, habilidades, personagem\n"
+"; inventario, bau, cubo, loja, menu do NPC: o direcional pula de item em item / casa em casa / opcao em opcao\n"
+"; (o analogico continua movendo o cursor livre). Loja: A num item abre a caixa Sim/Nao com o cursor no Sim;\n"
+"; direcional alterna Sim/Nao, B = Nao. Botao \"Organizar\" ao lado do inventario (ou menu de cheats).\n"
 "[Painel]\n"
 "A=LCLICK\n"
 "Y=RCLICK\n"
@@ -709,6 +713,95 @@ static void move_cursor(float gx, float gy)
     PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
 }
 
+/* Posicionamento EXATO do cursor (navegacao por direcional, Sim/Nao, organizar inventario). O D2GL nao converte
+ * a janela para o jogo como o fallback_mapping supoe (no Ryujinx: pedir x 577 levava o mouse do jogo a 598, pedir
+ * 54 levava a 0; y saia ~2% menor). Aqui cada eixo tem um mapa linear cliente = A*jogo + B aprendido com
+ * observacoes: manda o WM_MOUSEMOVE, le a posicao do mouse do jogo (D2Client) e corrige. Por resolucao. */
+typedef struct { float c, g; } CalObs;
+static struct { int res; CalObs x[8], y[8]; int nx, ny, ix, iy; float ax, bx, ay, by; int okx, oky; } g_cm;
+static void cal_fit(CalObs *o, int *pn, int *pi, float *a, float *b, int *ok)
+{
+    float mc = 0, mg = 0, sgg = 0, sgc = 0, lo = 1e9f, hi = -1e9f, na, nb, worst = 0;
+    int i, n = *pn;
+    if (n < 2) return;
+    for (i = 0; i < n; i++) { mc += o[i].c; mg += o[i].g; if (o[i].g < lo) lo = o[i].g; if (o[i].g > hi) hi = o[i].g; }
+    if (hi - lo < 60) return;
+    mc /= n; mg /= n;
+    for (i = 0; i < n; i++) { sgg += (o[i].g - mg) * (o[i].g - mg); sgc += (o[i].g - mg) * (o[i].c - mc); }
+    if (sgg < 1) return;
+    na = sgc / sgg; nb = mc - na * mg;
+    for (i = 0; i < n; i++) { float r = fabsf(na * o[i].g + nb - o[i].c); if (r > worst) worst = r; }
+    if (na <= 0.3f || na > 4.0f || worst > 6.0f) {        /* medida incoerente: fica so com a ultima */
+        int last = (*pi + 7) % 8;
+        o[0] = o[last]; *pn = 1; *pi = 1;
+        return;
+    }
+    *a = na; *b = nb; *ok = 1;
+}
+static void cal_reset_if_res(void)
+{
+    RECT rc;
+    float w, h;
+    if (g_cm.res == g_resx * 10000 + g_resy) return;
+    memset(&g_cm, 0, sizeof(g_cm));
+    g_cm.res = g_resx * 10000 + g_resy;
+    /* ponto de partida medido: em x o D2GL usa a area 4:3 centralizada; em y o mapa antigo (as observacoes corrigem) */
+    GetClientRect(g_hwnd, &rc);
+    w = (float)(rc.right - rc.left); h = (float)(rc.bottom - rc.top);
+    if (w > h * 4.0f / 3.0f + 8) { g_cm.ax = h * 4.0f / 3.0f / g_resx; g_cm.bx = (w - h * 4.0f / 3.0f) / 2.0f; }
+    else { g_cm.ax = g_sx; g_cm.bx = g_ox; }
+    g_cm.ay = g_sy; g_cm.by = g_oy;
+}
+static void cal_observe(int cx, int cy, int gx, int gy)
+{
+    if (cx >= 0 && gx > 0 && gx < g_resx - 1) {
+        g_cm.x[g_cm.ix % 8].c = (float)cx; g_cm.x[g_cm.ix % 8].g = (float)gx; g_cm.ix++; if (g_cm.nx < 8) g_cm.nx++;
+        cal_fit(g_cm.x, &g_cm.nx, &g_cm.ix, &g_cm.ax, &g_cm.bx, &g_cm.okx);
+    }
+    if (cy >= 0 && gy > 0 && gy < g_resy - 1) {
+        g_cm.y[g_cm.iy % 8].c = (float)cy; g_cm.y[g_cm.iy % 8].g = (float)gy; g_cm.iy++; if (g_cm.ny < 8) g_cm.ny++;
+        cal_fit(g_cm.y, &g_cm.ny, &g_cm.iy, &g_cm.ay, &g_cm.by, &g_cm.oky);
+    }
+}
+/* move o cursor para (gx,gy) do jogo e confere; devolve 1 se o mouse do jogo chegou a 1 px.
+ * So na thread do D2NXPad (espera o jogo processar a mensagem). */
+static int move_cursor_exact(float gx, float gy)
+{
+    int it, mx = -1, my = -1, ok = 0;
+    float fcx, fcy;
+    RECT rc;
+    if (!g_hwnd || !g_ver || !g_ver->mouse_x) return 0;
+    cal_reset_if_res();
+    gx = clampf(gx, 0, (float)g_resx - 1); gy = clampf(gy, 0, (float)g_resy - 1);
+    fcx = g_cm.ax * gx + g_cm.bx; fcy = g_cm.ay * gy + g_cm.by;
+    GetClientRect(g_hwnd, &rc);
+    for (it = 0; it < 5 && !ok; it++) {
+        int cx = (int)lroundf(clampf(fcx, 0, (float)rc.right - 1)), cy = (int)lroundf(clampf(fcy, 0, (float)rc.bottom - 1));
+        int w, k, px, py;
+        game_mouse(&px, &py);
+        g_cursor_parked = 0;
+        w = (g_lbtn ? MK_LBUTTON : 0) | (g_rbtn ? MK_RBUTTON : 0);
+        PostMessageA(g_hwnd, WM_MOUSEMOVE, w, MAKELPARAM(cx, cy));
+        /* clique e botoes usam g_curx/g_cury pelo mapa antigo: guarda o inverso do ponto de cliente usado */
+        g_curx = (cx - g_ox) / g_sx; g_cury = (cy - g_oy) / g_sy;
+        mx = px; my = py;
+        for (k = 0; k < 40; k++) {                    /* o jogo processa a mensagem na thread dele */
+            Sleep(4);
+            game_mouse(&mx, &my);
+            if (mx != px || my != py) { Sleep(4); game_mouse(&mx, &my); break; }
+        }
+        /* so aprende quando o jogo mostrou ter processado este movimento (o mouse mudou) */
+        if (mx != px || my != py) cal_observe(mx != px ? cx : -1, my != py ? cy : -1, mx, my);
+        ok = abs(mx - (int)lroundf(gx)) <= 1 && abs(my - (int)lroundf(gy)) <= 1;
+        /* proxima tentativa: corrige pelo erro observado (converge mesmo com a inclinacao ainda errada) */
+        if (mx == px && my == py && !ok) continue;      /* o jogo ainda nao processou: tenta de novo igual */
+        if (mx > 0 && mx < g_resx - 1) fcx = cx + (gx - mx) * g_cm.ax; else fcx = g_cm.ax * gx + g_cm.bx;
+        if (my > 0 && my < g_resy - 1) fcy = cy + (gy - my) * g_cm.ay; else fcy = g_cm.ay * gy + g_cm.by;
+    }
+    if (!ok) dbg("cursor exato: pedido %.0f,%.0f, jogo %d,%d", gx, gy, mx, my);
+    return ok;
+}
+
 static void park_cursor(void)
 {
     if (!g_hwnd || g_cursor_parked) return;
@@ -1155,6 +1248,7 @@ static Act binding(int ctx, int b)
  * acoes nativas (sem mouse): alvo por deteccao na tela, comando direto na unidade
  * ==================================================================================== */
 static DWORD unit_id(DWORD u) { return rd32(u + 0x0C); }
+static DWORD g_last_npc;               /* ultimo NPC com quem o heroi interagiu (loja) */
 /* modos do jogador em que ele pode receber outro comando (parado, andando, correndo, levando golpe) */
 static int player_ready(void)
 {
@@ -1195,6 +1289,7 @@ static void begin_attack(Hold *h, int right)
     attack_command(h);
     dbg("%s: %s", right ? "habilidade direita" : "ataque", h->unit ? "no alvo" : "a frente");
 }
+static int interact_ready(float d, DWORD since);
 static void continue_attack(Hold *h)
 {
     DWORD now = GetTickCount();
@@ -1203,8 +1298,10 @@ static void continue_attack(Hold *h)
         for (i = 0; i < g_nunits; i++)
             if (g_units[i].unit == h->unit) {
                 float d = sqrtf((g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py));
-                if (d <= 3.0f && !h->shift) {
+                if (d <= 3.5f && !h->last) h->last = GetTickCount();
+                if (!h->shift && interact_ready(d, h->last ? h->last : GetTickCount())) {
                     native_queue(NC_INTERACT, rd32(h->unit), unit_id(h->unit));
+                    g_last_npc = h->unit;
                     h->shift = 1;                          /* uma interacao por toque */
                     dbg("interagir: alvo a %.1f, comando enviado", d);
                 }
@@ -1227,8 +1324,17 @@ static void end_attack(Hold *h)
     (void)h;
     InterlockedExchange(&g_mv_busy, 0);
 }
+/* pode interagir: perto do alvo E parado (fim do caminho do comando "correr ate a unidade"). Interagir ainda
+ * correndo abria o menu do NPC, mas o fim do caminho desfazia a interacao no servidor e o TRADE fechava o menu
+ * (no Ryujinx, sempre logo depois de chegar andando). Sem parar em 1,5 s, interage assim mesmo. */
+static int interact_ready(float d, DWORD since)
+{
+    DWORD m = g_player ? rd32(g_player + U_MODE) : 0;
+    if (d > 3.5f) return 0;
+    return m == 1 || m == 5 || GetTickCount() - since > 1500;
+}
 /* interacao pendente: o B foi solto antes de o heroi chegar ao alvo */
-static DWORD g_pend_unit, g_pend_t;
+static DWORD g_pend_unit, g_pend_t, g_pend_near;
 static void pending_interact_tick(void)
 {
     int i;
@@ -1237,8 +1343,9 @@ static void pending_interact_tick(void)
     for (i = 0; i < g_nunits; i++)
         if (g_units[i].unit == g_pend_unit) {
             float d = sqrtf((g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py));
-            if (d <= 3.0f) {
+            if (interact_ready(d, g_pend_near ? g_pend_near : (g_pend_near = d <= 3.5f ? GetTickCount() : 0))) {
                 native_queue(NC_INTERACT, rd32(g_pend_unit), unit_id(g_pend_unit));
+                g_last_npc = g_pend_unit;
                 dbg("interagir: alvo a %.1f, comando enviado (depois de soltar)", d);
                 g_pend_unit = 0;
             }
@@ -1378,6 +1485,455 @@ static int name_editor_tick(void)
     return 1;
 }
 
+/* ======================================================================================
+ * navegacao nos paineis pelo direcional: pula de item em item / casa em casa, opcoes do NPC, Sim/Nao da loja.
+ * Geometria do inventory.bin que o proprio jogo carrega (Median XL 2.14.6 ja vem para 1024x768: inventario 15x10
+ * em 551,330; loja 15x15 em 39,180; bau 14x14; cubo 15x10; casas de 29 px; posicoes dos equipamentos). Ocupacao
+ * de cada casa pela grade da unidade (Inventory+0x14: celulas com o Unit* do item), entao um item 2x3 e um alvo so.
+ * O cursor vai ao alvo pelo move_cursor_exact (confere no mouse do jogo). O analogico continua movendo o cursor
+ * livre (organizar o inventario, arrastar itens).
+ * ==================================================================================== */
+typedef struct { int l, r, t, b; } IRect;
+typedef struct { IRect rect; int gx, gy, gl, gr, gt, gb, bw, bh; IRect loc[10]; } InvRec;
+static InvRec g_ir[64];
+static int g_nir = -1;
+static void inv_layout_load(void)
+{
+    typedef BOOL (WINAPI *SOpen_t)(const char *, HANDLE *);
+    typedef DWORD (WINAPI *SSize_t)(HANDLE, DWORD *);
+    typedef BOOL (WINAPI *SRead_t)(HANDLE, void *, DWORD, DWORD *, void *);
+    typedef BOOL (WINAPI *SClose_t)(HANDLE);
+    HMODULE st = GetModuleHandleA("Storm.dll");
+    SOpen_t so = st ? (SOpen_t)(void *)GetProcAddress(st, (LPCSTR)267) : NULL;
+    SSize_t ss = st ? (SSize_t)(void *)GetProcAddress(st, (LPCSTR)265) : NULL;
+    SRead_t sr = st ? (SRead_t)(void *)GetProcAddress(st, (LPCSTR)269) : NULL;
+    SClose_t sc = st ? (SClose_t)(void *)GetProcAddress(st, (LPCSTR)253) : NULL;
+    HANDLE fh = 0;
+    g_nir = 0;
+    if (!so || !ss || !sr || !sc || !so("DATA\\GLOBAL\\EXCEL\\inventory.bin", &fh)) { lg("navegacao: inventory.bin indisponivel"); return; }
+    {
+        DWORD size = ss(fh, NULL), got = 0, n, i;
+        BYTE *b = malloc(size + 4);
+        if (b && sr(fh, b, size, &got, NULL) && got >= 4 && (n = *(DWORD *)b) && n <= 64 && 4 + n * 240 == got) {
+            for (i = 0; i < n; i++) {
+                BYTE *r = b + 4 + i * 240;
+                InvRec *o = &g_ir[i];
+                int k;
+                memcpy(&o->rect, r, 16);
+                o->gx = r[16]; o->gy = r[17];
+                o->gl = *(int *)(r + 20); o->gr = *(int *)(r + 24); o->gt = *(int *)(r + 28); o->gb = *(int *)(r + 32);
+                o->bw = r[36]; o->bh = r[37];
+                for (k = 0; k < 10; k++) memcpy(&o->loc[k], r + 40 + k * 20, 16);
+            }
+            g_nir = (int)n;
+        }
+        lg("navegacao: inventory.bin %lu bytes, %d registros (inventario %dx%d em %d,%d)", got, g_nir,
+           g_nir ? g_ir[0].gx : 0, g_nir ? g_ir[0].gy : 0, g_nir ? g_ir[0].gl : 0, g_nir ? g_ir[0].gt : 0);
+        free(b);
+    }
+    sc(fh);
+}
+/* registro base (0-15, tabela 640x480 do inventory.txt) -> registro da resolucao atual */
+static const InvRec *inv_rec(int base)
+{
+    int i;
+    if (g_nir < 0) return NULL;                         /* carregado na thread do jogo (game_frame) */
+    i = base + (g_resx >= 800 && g_nir >= 32 ? 16 : 0);
+    if (i >= g_nir || g_ir[i].bw <= 0 || g_ir[i].bh <= 0) return NULL;
+    return &g_ir[i];
+}
+static int class_rec(void)
+{
+    static const int r[7] = { 0, 1, 2, 3, 4, 14, 15 };
+    int c = g_player ? (int)rd32(g_player + 4) : 0;
+    return c >= 0 && c < 7 ? r[c] : 0;
+}
+/* grade gi da unidade: celulas (Unit* por casa) e dimensoes */
+static DWORD inv_grid(DWORD unit, int gi, int *w, int *h)
+{
+    DWORD inv = unit ? rd32(unit + 0x60) : 0, gr;
+    if (!inv || rd32(inv) != 0x01020304 || gi >= (int)rd32(inv + 0x18)) return 0;
+    gr = rd32(inv + 0x14) + gi * 0x10;
+    *w = rd8(gr + 8); *h = rd8(gr + 9);
+    return rd32(gr + 0x0C);
+}
+/* aba da loja do Median XL 2.14.6 (0 Armor, 1 Weapons, 2 Weapons, 3 Misc): [D2Sigma+0x33DAE8]+0x10, achado no
+ * Ryujinx varrendo a memoria ao trocar de aba. Fora da faixa: 0. */
+static int shop_page(void)
+{
+    DWORD sig = (DWORD)GetModuleHandleA("D2Sigma.dll"), p = sig ? rd32(sig + 0x33DAE8) : 0;
+    int v = p ? (int)rd32(p + 0x10) : -1;
+    return v >= 0 && v <= 3 ? v : 0;
+}
+
+#define SORT_BTN_X0 392.0f
+#define SORT_BTN_Y0 332.0f
+#define SORT_BTN_X1 504.0f
+#define SORT_BTN_Y1 358.0f
+static int sort_button_visible(void);
+static void menu_status(const wchar_t *msg);
+enum { NT_CELL, NT_ITEM, NT_LOC, NT_TAB, NT_OPT, NT_YES, NT_NO, NT_BTN };
+typedef struct { float x, y, x0, y0, x1, y1; int kind, area; } NavT;
+static NavT g_nt[700];
+static int g_nnt;
+static void nav_add(float x0, float y0, float x1, float y1, int kind, int area)
+{
+    NavT *t;
+    if (g_nnt >= (int)(sizeof(g_nt) / sizeof(g_nt[0]))) return;
+    t = &g_nt[g_nnt++];
+    t->x0 = x0; t->y0 = y0; t->x1 = x1; t->y1 = y1; t->x = (x0 + x1) / 2; t->y = (y0 + y1) / 2;
+    t->kind = kind; t->area = area;
+}
+/* area: 0 = painel direito (inventario), 1 = painel esquerdo (loja/bau/cubo) */
+static void nav_add_grid(DWORD unit, int gi, const InvRec *r, int area)
+{
+    int w = 0, h = 0, x, y, W, H, ns = 0;
+    DWORD cells, seen[160];
+    if (!r) return;
+    W = r->gx; H = r->gy;
+    if (W <= 0 || H <= 0 || W > 32 || H > 32) return;
+    cells = unit ? inv_grid(unit, gi, &w, &h) : 0;
+    if (cells && (w != W || h != H)) cells = 0;              /* grade diferente do desenho: so as casas */
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            DWORD c = cells ? rd32(cells + (y * W + x) * 4) : 0;
+            float cx0 = (float)(r->gl + x * r->bw), cy0 = (float)(r->gt + y * r->bh);
+            if (!c) { nav_add(cx0, cy0, cx0 + r->bw, cy0 + r->bh, NT_CELL, area); continue; }
+            {
+                int k, x0 = x, x1 = x, y0 = y, y1 = y, i, j;
+                for (k = 0; k < ns && seen[k] != c; k++) ;
+                if (k < ns) continue;
+                if (ns < 160) seen[ns++] = c;
+                for (j = 0; j < H; j++)
+                    for (i = 0; i < W; i++)
+                        if (rd32(cells + (j * W + i) * 4) == c) {
+                            if (i < x0) x0 = i;
+                            if (i > x1) x1 = i;
+                            if (j < y0) y0 = j;
+                            if (j > y1) y1 = j;
+                        }
+                nav_add((float)(r->gl + x0 * r->bw), (float)(r->gt + y0 * r->bh),
+                        (float)(r->gl + (x1 + 1) * r->bw), (float)(r->gt + (y1 + 1) * r->bh), NT_ITEM, area);
+            }
+        }
+}
+static void nav_add_locs(const InvRec *r, int area)
+{
+    int k;
+    if (!r) return;
+    for (k = 0; k < 10; k++)
+        if (r->loc[k].l >= 0 && r->loc[k].r > r->loc[k].l && r->loc[k].b > r->loc[k].t)
+            nav_add((float)r->loc[k].l, (float)r->loc[k].t, (float)r->loc[k].r, (float)r->loc[k].b, NT_LOC, area);
+}
+
+/* Sim/Nao da compra (Median XL 2.14.6, 1024x768): a caixa aparece centralizada no painel da loja, medida no
+ * Ryujinx. O jogo nao a anuncia em nenhuma variavel achavel; o D2NXPad sabe que ela abriu porque o A foi num item
+ * da loja. Enquanto ela estiver aberta o direcional so alterna Sim/Nao e o B escolhe Nao (o ESC fecharia a loja). */
+#define CONFIRM_YES_X 256.0f
+#define CONFIRM_YES_Y 214.0f
+#define CONFIRM_NO_Y 228.0f
+static DWORD g_confirm_t;
+static int g_confirm_x, g_confirm_y;    /* item que abriu a caixa: o cursor volta para ele */
+static DWORD g_panel_sig;              /* paineis abertos (para reposicionar o cursor quando mudam) */
+static DWORD g_home_due;               /* reposicionar quando o painel ficar pronto (menu do NPC) */
+static int confirm_active(void)
+{
+    if (!g_confirm_t) return 0;
+    if (GetTickCount() - g_confirm_t > 15000 || !ui_open(UI_NPCSHOP)) { g_confirm_t = 0; return 0; }
+    return 1;
+}
+
+/* opcoes do menu do NPC pelo retangulo que o jogo guarda em D2Client+0x11963C (esq, topo, dir, base; achado no
+ * Ryujinx comparando a memoria com o menu fechado/aberto): titulo + opcoes de ~17,6 px */
+static int npc_menu_options(float *x, float *ys, int max)
+{
+    int l = (int)rd32(g_client + 0x11963C), t = (int)rd32(g_client + 0x119640);
+    int r = (int)rd32(g_client + 0x119644), b = (int)rd32(g_client + 0x119648), lines, i, n = 0;
+    if (!g_ver || strcmp(g_ver->name, "1.13c") || r <= l || b <= t || r - l > 600 || b - t > 400) return 0;
+    lines = (int)((b - t - 6) / 17.6f + 0.3f);
+    for (i = 1; i < lines && n < max; i++) ys[n++] = t + 12 + i * 17.6f;
+    *x = (l + r) / 2.0f;
+    return n;
+}
+
+static int nav_build(void)
+{
+    int inv_panel = ui_open(UI_INVENTORY) || ui_open(UI_NPCSHOP) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE);
+    g_nnt = 0;
+    if (!g_player || g_resx != 1024 || g_resy != 768) return 0;   /* geometria medida no Median XL 1024x768 */
+    if (confirm_active()) {
+        nav_add(CONFIRM_YES_X - 30, CONFIRM_YES_Y - 6, CONFIRM_YES_X + 30, CONFIRM_YES_Y + 6, NT_YES, 1);
+        nav_add(CONFIRM_YES_X - 30, CONFIRM_NO_Y - 6, CONFIRM_YES_X + 30, CONFIRM_NO_Y + 6, NT_NO, 1);
+        return 1;
+    }
+    if (ui_open(UI_NPCMENU) && !ui_open(UI_NPCSHOP)) {
+        float x, ys[12];
+        int n = npc_menu_options(&x, ys, 12), i;
+        for (i = 0; i < n; i++) nav_add(x - 30, ys[i] - 7, x + 30, ys[i] + 7, NT_OPT, 1);
+        return g_nnt > 0;
+    }
+    if (inv_panel) {
+        const InvRec *r = inv_rec(class_rec());
+        nav_add_grid(g_player, 2, r, 0);
+        nav_add_locs(r, 0);
+    }
+    if (ui_open(UI_NPCSHOP) && g_last_npc) {
+        static const float tabs[4] = { 97, 203, 314, 422 };
+        int k;
+        nav_add_grid(g_last_npc, 2 + shop_page(), inv_rec(5), 1);
+        for (k = 0; k < 4; k++) nav_add(tabs[k] - 40, 148, tabs[k] + 40, 164, NT_TAB, 1);
+    }
+    if (ui_open(UI_STASH)) {
+        static const float bx[4] = { 254, 313, 389, 434 };   /* botoes do bau do Median XL (ouro, ?, pagina -/+) */
+        int k;
+        nav_add_grid(g_player, 6, inv_rec(12), 1);
+        for (k = 0; k < 4; k++) nav_add(bx[k] - 18, 590, bx[k] + 18, 614, NT_BTN, 1);
+    }
+    if (sort_button_visible()) nav_add(SORT_BTN_X0, SORT_BTN_Y0, SORT_BTN_X1, SORT_BTN_Y1, NT_BTN, 0);
+    if (ui_open(UI_CUBE)) nav_add_grid(g_player, 5, inv_rec(9), 1);
+    return g_nnt > 0;
+}
+static int nav_inside(const NavT *t, float x, float y) { return x >= t->x0 && x < t->x1 && y >= t->y0 && y < t->y1; }
+/* um passo do direcional: o alvo mais perto na direcao, preferindo os que se sobrepoem no eixo perpendicular */
+static int nav_dir(int dx, int dy)
+{
+    int mx, my, i, cur = -1, best = -1;
+    float ox, oy, bx0, by0, bx1, by1, bs = 1e9f;
+    if (!game_mouse(&mx, &my) || !nav_build()) return 0;
+    ox = (float)mx; oy = (float)my; bx0 = bx1 = ox; by0 = by1 = oy;
+    for (i = 0; i < g_nnt; i++)
+        if (nav_inside(&g_nt[i], ox, oy)) { cur = i; break; }
+    if (cur >= 0) { ox = g_nt[cur].x; oy = g_nt[cur].y; bx0 = g_nt[cur].x0; bx1 = g_nt[cur].x1; by0 = g_nt[cur].y0; by1 = g_nt[cur].y1; }
+    for (i = 0; i < g_nnt; i++) {
+        const NavT *t = &g_nt[i];
+        float vx = t->x - ox, vy = t->y - oy, along = vx * dx + vy * dy, gap, sc;
+        if (i == cur) continue;
+        /* tem de estar alem da borda do elemento atual na direcao */
+        if (dx > 0 && t->x0 < bx1 - 1) continue;
+        if (dx < 0 && t->x1 > bx0 + 1) continue;
+        if (dy > 0 && t->y0 < by1 - 1) continue;
+        if (dy < 0 && t->y1 > by0 + 1) continue;
+        if (along <= 0) continue;
+        {   /* sobreposicao no eixo perpendicular: alinhado (mesma linha/coluna) tem prioridade */
+            float ov = dx ? (t->y1 < by1 ? t->y1 : by1) - (t->y0 > by0 ? t->y0 : by0)
+                          : (t->x1 < bx1 ? t->x1 : bx1) - (t->x0 > bx0 ? t->x0 : bx0);
+            gap = ov > 0 ? 0 : -ov + 20.0f;
+        }
+        sc = along + gap * 3.0f + fabsf(dx ? vy : vx) * 0.5f;
+        if (sc < bs) { bs = sc; best = i; }
+    }
+    if (best < 0 && cur < 0) {                            /* cursor fora de tudo: vai ao alvo mais perto */
+        for (i = 0; i < g_nnt; i++) {
+            float vx = g_nt[i].x - ox, vy = g_nt[i].y - oy, d = vx * vx + vy * vy;
+            if (d < bs) { bs = d; best = i; }
+        }
+    }
+    if (best < 0) return 1;                               /* nada nessa direcao: fica */
+    move_cursor_exact(g_nt[best].x, g_nt[best].y);
+    dbg("navegacao: %+d,%+d -> alvo %d (tipo %d) em %.0f,%.0f", dx, dy, best, g_nt[best].kind, g_nt[best].x, g_nt[best].y);
+    return 1;
+}
+/* cursor ao abrir um painel: primeira opcao do NPC, primeiro item da loja/bau/cubo ou do inventario */
+static void nav_home(void)
+{
+    int i, best = -1, want_area = (ui_open(UI_NPCSHOP) || ui_open(UI_STASH) || ui_open(UI_CUBE)) ? 1 : 0, pass;
+    float bs = 1e9f;
+    if (!nav_build()) return;
+    for (pass = 0; pass < 2 && best < 0; pass++)
+        for (i = 0; i < g_nnt; i++) {
+            const NavT *t = &g_nt[i];
+            float sc = t->y0 * 4 + t->x0;
+            if (t->kind == NT_OPT) { if (sc < bs) { bs = sc; best = i; } continue; }
+            if (t->area != want_area || t->kind == NT_TAB || t->kind == NT_LOC || t->kind == NT_BTN) continue;
+            if (pass == 0 && t->kind != NT_ITEM) continue;          /* 1a passada: so itens */
+            if (sc < bs) { bs = sc; best = i; }
+        }
+    if (best >= 0) move_cursor_exact(g_nt[best].x, g_nt[best].y);
+}
+/* A no painel: se for um item da loja, a caixa Sim/Nao vai abrir */
+static int shop_item_under_cursor(void)
+{
+    const InvRec *r = inv_rec(5);
+    int mx, my, w = 0, h = 0, x, y;
+    DWORD cells;
+    if (!r || !ui_open(UI_NPCSHOP) || !g_last_npc || !game_mouse(&mx, &my)) return 0;
+    if (mx < r->gl || my < r->gt) return 0;
+    x = (mx - r->gl) / r->bw; y = (my - r->gt) / r->bh;
+    if (x >= r->gx || y >= r->gy) return 0;
+    cells = inv_grid(g_last_npc, 2 + shop_page(), &w, &h);
+    return cells && w == r->gx && h == r->gy && rd32(cells + (y * w + x) * 4) != 0;
+}
+
+/* ---- organizar o inventario (botao ao lado do inventario e opcao do menu de cheats) ----
+ * Cada movimento e um clique do proprio jogo (pegar o item, soltar no destino), com o cursor exato e conferido na
+ * grade do jogo depois de cada passo; nada e criado nem apagado. Ordem: maiores primeiro, por coluna (de cima para
+ * baixo, da esquerda para a direita), itens iguais juntos. Se faltar espaco livre para abrir caminho, para no meio
+ * (o inventario fica valido, so menos organizado). B cancela. */
+typedef struct { DWORD unit; int x, y, w, h, cls, tx, ty, done; } SortIt;
+static volatile LONG g_sort_req, g_sorting;
+static int left_panel_open(void)
+{
+    return ui_open(UI_CHARACTER) || ui_open(UI_QUEST) || ui_open(UI_PARTY) || ui_open(UI_MERC) || ui_open(UI_WAYPOINT) ||
+           ui_open(UI_NPCSHOP) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE) || ui_open(UI_NPCMENU) ||
+           ui_open(UI_GAMEMENU) || ui_open(UI_CONFIG) || ui_open(UI_HELP) || ui_open(UI_MSGLOG) || ui_open(UI_QUESTLOG);
+}
+static int sort_button_visible(void)
+{
+    return g_player && g_resx == 1024 && g_resy == 768 && ui_open(UI_INVENTORY) && !left_panel_open() && inv_rec(class_rec());
+}
+static int sort_button_hit(int mx, int my)
+{
+    return mx >= SORT_BTN_X0 && mx < SORT_BTN_X1 && my >= SORT_BTN_Y0 && my < SORT_BTN_Y1;
+}
+static int sort_read(SortIt *it, int max, int *W, int *H)
+{
+    int w = 0, h = 0, x, y, n = 0, k;
+    DWORD cells = inv_grid(g_player, 2, &w, &h);
+    if (!cells || w <= 0 || h <= 0 || w > 32 || h > 32) return -1;
+    *W = w; *H = h;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            DWORD c = rd32(cells + (y * w + x) * 4);
+            if (!c) continue;
+            for (k = 0; k < n && it[k].unit != c; k++) ;
+            if (k == n) {
+                if (n >= max) return -1;
+                memset(&it[n], 0, sizeof(it[n]));
+                it[n].unit = c; it[n].x = x; it[n].y = y; it[n].w = 1; it[n].h = 1; it[n].cls = (int)rd32(c + 4);
+                n++;
+            } else {
+                if (x - it[k].x + 1 > it[k].w) it[k].w = x - it[k].x + 1;
+                if (y - it[k].y + 1 > it[k].h) it[k].h = y - it[k].y + 1;
+            }
+        }
+    return n;
+}
+static DWORD cursor_item(void)
+{
+    DWORD inv = g_player ? rd32(g_player + 0x60) : 0;
+    return inv && rd32(inv) == 0x01020304 ? rd32(inv + 0x20) : 0;
+}
+static int sort_cancel(void)
+{
+    XState st;
+    memset(&st, 0, sizeof(st));
+    return pXInputGetState && pXInputGetState(cfg.pad_index >= 0 ? cfg.pad_index : 0, &st) == ERROR_SUCCESS &&
+           (st.Gamepad.wButtons & 0x1000);                       /* B do Switch */
+}
+static void sort_cell_center(const InvRec *r, float x, float y, float w, float h, float *cx, float *cy)
+{
+    *cx = r->gl + (x + w / 2.0f) * r->bw;
+    *cy = r->gt + (y + h / 2.0f) * r->bh;
+}
+/* pega o item e solta com o canto em (tx,ty); devolve 1 se a grade confirmou */
+static int sort_move(const InvRec *r, SortIt *it, int tx, int ty)
+{
+    float cx, cy, dx, dy;
+    int k, w = 0, h = 0;
+    DWORD cells;
+    sort_cell_center(r, (float)it->x, (float)it->y, (float)it->w, (float)it->h, &cx, &cy);
+    sort_cell_center(r, (float)tx, (float)ty, (float)it->w, (float)it->h, &dx, &dy);
+    if (!move_cursor_exact(cx, cy)) return 0;
+    Sleep(30); click(0, 0);
+    for (k = 0; k < 60 && cursor_item() != it->unit; k++) Sleep(15);
+    if (cursor_item() != it->unit) { lg("organizar: nao pegou o item %08lX", it->unit); return 0; }
+    move_cursor_exact(dx, dy);
+    Sleep(30); click(0, 0);
+    for (k = 0; k < 60 && cursor_item(); k++) Sleep(15);
+    if (cursor_item()) {                                       /* nao coube: devolve ao lugar */
+        lg("organizar: item %08lX nao coube em %d,%d; devolvendo", it->unit, tx, ty);
+        move_cursor_exact(cx, cy); Sleep(30); click(0, 0);
+        for (k = 0; k < 60 && cursor_item(); k++) Sleep(15);
+        return 0;
+    }
+    cells = inv_grid(g_player, 2, &w, &h);
+    if (!cells || rd32(cells + (ty * w + tx) * 4) != it->unit) { lg("organizar: item %08lX nao esta em %d,%d", it->unit, tx, ty); return 0; }
+    it->x = tx; it->y = ty;
+    return 1;
+}
+static int sort_fits(const unsigned char *occ, int W, int H, int x, int y, int w, int h)
+{
+    int i, j;
+    if (x < 0 || y < 0 || x + w > W || y + h > H) return 0;
+    for (j = y; j < y + h; j++) for (i = x; i < x + w; i++) if (occ[j * W + i]) return 0;
+    return 1;
+}
+static void sort_mark(unsigned char *occ, int W, int x, int y, int w, int h, unsigned char v)
+{
+    int i, j;
+    for (j = y; j < y + h; j++) for (i = x; i < x + w; i++) occ[j * W + i] = v;
+}
+static int sort_cmp_size(const SortIt *a, const SortIt *b)
+{
+    if (a->h != b->h) return b->h - a->h;
+    if (a->w != b->w) return b->w - a->w;
+    if (a->cls != b->cls) return a->cls - b->cls;
+    return a->x * 64 + a->y - (b->x * 64 + b->y);
+}
+static void sort_inventory(void)
+{
+    static SortIt it[160];
+    int n, W, H, i, j, ord[160], moved = 0, ok = 1;
+    unsigned char occ[32 * 32];
+    const InvRec *r = inv_rec(class_rec());
+    DWORD t0 = GetTickCount();
+    if (!r || !sort_button_visible() || cursor_item()) { lg("organizar: inventario precisa estar aberto sozinho e sem item no cursor"); return; }
+    InterlockedExchange(&g_sorting, 1);
+    n = sort_read(it, 160, &W, &H);
+    if (n <= 0 || W != r->gx || H != r->gy) { InterlockedExchange(&g_sorting, 0); lg("organizar: nada a fazer (%d itens)", n); return; }
+    for (i = 0; i < n; i++) ord[i] = i;
+    for (i = 1; i < n; i++)                                       /* ordena: maiores primeiro, iguais juntos */
+        for (j = i; j > 0 && sort_cmp_size(&it[ord[j]], &it[ord[j - 1]]) < 0; j--) { int t = ord[j]; ord[j] = ord[j - 1]; ord[j - 1] = t; }
+    memset(occ, 0, sizeof(occ));
+    for (i = 0; i < n; i++) {                                     /* destino de cada item, por coluna */
+        SortIt *a = &it[ord[i]];
+        int x, y, found = 0;
+        for (x = 0; x < W && !found; x++)
+            for (y = 0; y < H && !found; y++)
+                if (sort_fits(occ, W, H, x, y, a->w, a->h)) { a->tx = x; a->ty = y; sort_mark(occ, W, x, y, a->w, a->h, 1); found = 1; }
+        if (!found) { lg("organizar: a arrumacao nao cabe; nada foi mexido"); InterlockedExchange(&g_sorting, 0); return; }
+    }
+    lg("organizar: %d itens", n);
+    for (i = 0; i < n && ok; i++) {
+        SortIt *a = &it[ord[i]];
+        unsigned char res[32 * 32];
+        int k;
+        if (sort_cancel()) { lg("organizar: cancelado (B)"); break; }
+        if (a->x == a->tx && a->y == a->ty) { a->done = 1; continue; }
+        /* reservado: destinos dos itens ja arrumados + o deste */
+        memset(res, 0, sizeof(res));
+        for (k = 0; k < n; k++) if (it[k].done) sort_mark(res, W, it[k].tx, it[k].ty, it[k].w, it[k].h, 1);
+        sort_mark(res, W, a->tx, a->ty, a->w, a->h, 1);
+        /* tira do caminho os itens que estao no destino */
+        for (k = 0; k < n && ok; k++) {
+            SortIt *b = &it[k];
+            int x, y, tier, placed = 0;
+            if (b == a || b->done) continue;
+            if (b->x >= a->tx + a->w || b->x + b->w <= a->tx || b->y >= a->ty + a->h || b->y + b->h <= a->ty) continue;
+            for (tier = 0; tier < 2 && !placed; tier++)              /* 1o: fora de qualquer destino futuro */
+                for (x = W - b->w; x >= 0 && !placed; x--)
+                    for (y = H - b->h; y >= 0 && !placed; y--) {
+                        unsigned char cur[32 * 32];
+                        int m, bad = 0, ii, jj;
+                        memset(cur, 0, sizeof(cur));
+                        for (m = 0; m < n; m++) if (m != k) sort_mark(cur, W, it[m].x, it[m].y, it[m].w, it[m].h, 1);
+                        if (!sort_fits(cur, W, H, x, y, b->w, b->h)) continue;
+                        for (jj = y; jj < y + b->h && !bad; jj++) for (ii = x; ii < x + b->w && !bad; ii++) if (res[jj * W + ii]) bad = 1;
+                        if (!bad && tier == 0)
+                            for (m = 0; m < n && !bad; m++)
+                                if (!it[m].done && m != k && x < it[m].tx + it[m].w && x + b->w > it[m].tx && y < it[m].ty + it[m].h && y + b->h > it[m].ty) bad = 1;
+                        if (bad) continue;
+                        if (sort_move(r, b, x, y)) { placed = 1; moved++; } else ok = 0;
+                    }
+            if (!placed && ok) { lg("organizar: sem espaco livre para abrir caminho; parando aqui"); ok = 0; }
+        }
+        if (!ok) break;
+        if (sort_move(r, a, a->tx, a->ty)) { a->done = 1; moved++; } else ok = 0;
+    }
+    InterlockedExchange(&g_sorting, 0);
+    lg("organizar: %s, %d movimentos em %lu ms", ok ? "pronto" : "parou", moved, GetTickCount() - t0);
+    menu_status(ok ? L"Inventario organizado." : L"Organizar parou no meio (inventario cheio ou cancelado).");
+}
 static void start_action(int b, Act a)
 {
     Hold *h = &g_hold[b];
@@ -1392,9 +1948,38 @@ static void start_action(int b, Act a)
         h->stage = 0;                      /* espera o jogo trocar a habilidade */
         break;
     case A_RIGHT: begin_attack(h, 1); break;
-    case A_KEY: tap_key(a.vk, a.mods); h->active = 0; break;
+    case A_KEY:
+        if (a.vk == VK_ESCAPE && !a.mods && g_mode == M_PANEL && confirm_active()) {   /* B na caixa Sim/Nao: Nao */
+            move_cursor_exact(CONFIRM_YES_X, CONFIRM_NO_Y); Sleep(30); click(0, 0);
+            g_confirm_t = 0; h->active = 0; lg("loja: Nao (B)");
+            Sleep(150); move_cursor_exact((float)g_confirm_x, (float)g_confirm_y);
+            break;
+        }
+        tap_key(a.vk, a.mods); h->active = 0; break;
     case A_HOLD: key_mods(a.mods, 1); send_key(a.vk, 1); break;
-    case A_LCLICK: click(0, 0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    case A_LCLICK:
+        if (g_mode == M_PANEL && confirm_active()) {        /* respondeu a caixa (Sim ou Nao) */
+            int mx = 0, my = 0;
+            game_mouse(&mx, &my);
+            click(0, 0); g_confirm_t = 0; h->active = 0;
+            lg("loja: %s", my < (CONFIRM_YES_Y + CONFIRM_NO_Y) / 2 ? "Sim" : "Nao");
+            Sleep(150); move_cursor_exact((float)g_confirm_x, (float)g_confirm_y);
+            break;
+        }
+        if (g_mode == M_PANEL && sort_button_visible()) {    /* botao Organizar ao lado do inventario */
+            int mx = -1, my = -1;
+            game_mouse(&mx, &my);
+            if (sort_button_hit(mx, my)) { h->active = 0; sort_inventory(); break; }
+        }
+        if (g_mode == M_PANEL && shop_item_under_cursor()) {  /* comprar: a caixa Sim/Nao abre; cursor no Sim */
+            game_mouse(&g_confirm_x, &g_confirm_y);
+            click(0, 0); Sleep(250);
+            g_confirm_t = GetTickCount();
+            move_cursor_exact(CONFIRM_YES_X, CONFIRM_YES_Y);
+            lg("loja: caixa Sim/Nao, cursor no Sim");
+            h->active = 0; break;
+        }
+        click(0, 0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_RCLICK: click(1, 0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_SHIFTCLICK: click(0, 1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_CTRLCLICK: click(0, 2); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
@@ -1411,6 +1996,7 @@ static void start_action(int b, Act a)
 }
 static void nav_step(int b)
 {
+    if (nav_dir(b == B_LEFT ? -1 : b == B_RIGHT ? 1 : 0, b == B_UP ? -1 : b == B_DOWN ? 1 : 0)) return;
     float dx = b == B_LEFT ? -1.f : b == B_RIGHT ? 1.f : 0, dy = b == B_UP ? -1.f : b == B_DOWN ? 1.f : 0;
     float x = g_curx + dx * cfg.nav_step, y = g_cury + dy * cfg.nav_step;
     /* painel direito (inventario): encaixa no centro das celulas de 29px, como no D2R.
@@ -1452,7 +2038,7 @@ static void stop_action(int b)
     switch (h->act.kind) {
     case A_ATTACK: case A_RIGHT: end_attack(h); break;
     case A_INTERACT:   /* soltou antes de chegar: a interacao continua sozinha (um toque no B basta) */
-        if (h->stage == 2 && h->unit && !h->shift) { g_pend_unit = h->unit; g_pend_t = GetTickCount(); }
+        if (h->stage == 2 && h->unit && !h->shift) { g_pend_unit = h->unit; g_pend_t = GetTickCount(); g_pend_near = 0; }
         break;
     case A_SKILL: if (h->stage) end_attack(h); break;
     case A_HOLD: send_key(h->act.vk, 0); key_mods(h->act.mods, 0); break;
@@ -1623,7 +2209,7 @@ static const float g_rare_opts[] = { 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };
 static const int g_gold_opts[] = { 0, 1000, 5000, 10000, 50000, 100000 };
 #define GOLD_COUNT (sizeof(g_gold_opts)/sizeof(g_gold_opts[0]))
 
-#define MENU_ITEM_COUNT 6 /* 0: XP, 1: Runas, 2: Unicos, 3: Raros, 4: Ouro, 5: Salvar */
+#define MENU_ITEM_COUNT 7 /* 0: XP, 1: Runas, 2: Unicos, 3: Raros, 4: Ouro, 5: Salvar, 6: Organizar inventario */
 
 typedef struct {
     int open;
@@ -1884,7 +2470,8 @@ static void menu_status(const wchar_t *msg)
 static void draw_cheat_menu(void)
 {
     static const wchar_t *names[MENU_ITEM_COUNT] = {
-        L"Multiplicador de XP", L"Queda de runas", L"Itens unicos", L"Itens raros", L"Ouro inicial", L"Salvar e aplicar"
+        L"Multiplicador de XP", L"Queda de runas", L"Itens unicos", L"Itens raros", L"Ouro inicial", L"Salvar e aplicar",
+        L"Organizar inventario (agora)"
     };
     wchar_t line[128];
     int i, x = 48, y = 92, lh = 24;
@@ -1909,6 +2496,19 @@ static void draw_cheat_menu(void)
     pDrawText(L"Direcional: escolhe/altera   A: aplica   B: fecha", x, y + lh * (MENU_ITEM_COUNT + 1) + 4, 5, 0);
     if (g_menu_status[0] && GetTickCount() - g_menu_status_t < 5000)
         pDrawText(g_menu_status, x, y + lh * (MENU_ITEM_COUNT + 2) + 4, 4, 0);
+}
+
+/* botao desenhado ao lado do inventario (thread do jogo) */
+static void draw_sort_button(void)
+{
+    int mx = (int)rd32(g_client + g_ver->mouse_x), my = (int)rd32(g_client + g_ver->mouse_y), hov;
+    if (!pDrawText || !pSetFont || !pDrawRect) return;
+    hov = sort_button_hit(mx, my);
+    pDrawRect((int)SORT_BTN_X0, (int)SORT_BTN_Y0, (int)SORT_BTN_X1, (int)SORT_BTN_Y1, 0, 1);
+    pDrawRect((int)SORT_BTN_X0, (int)SORT_BTN_Y0, (int)SORT_BTN_X1, (int)SORT_BTN_Y0 + 1, hov ? 0x97 : 0x1F, 5);
+    pDrawRect((int)SORT_BTN_X0, (int)SORT_BTN_Y1 - 1, (int)SORT_BTN_X1, (int)SORT_BTN_Y1, hov ? 0x97 : 0x1F, 5);
+    pSetFont(0);
+    pDrawText(g_sorting ? L"Organizando..." : L"Organizar", (int)SORT_BTN_X0 + 14, (int)SORT_BTN_Y1 - 8, hov ? 9 : 4, 0);
 }
 
 static volatile LONG g_walk_log;     /* WalkTest: registra cada quadro */
@@ -1988,6 +2588,9 @@ static void game_frame(void)
         NatCmd c = g_natq[g_natq_tail % NATQ];
         InterlockedExchange(&g_natq_tail, g_natq_tail + 1);
         if (player) do_command(player, c.a, c.b, (DWORD)c.cmd);
+        /* uma acao (interagir, correr ate o NPC, atacar) substitui o "pare aqui" de quando o analogico e solto:
+         * mandado depois, ele cancelava a interacao no servidor (o menu do NPC ficava na tela, mas o TRADE fechava) */
+        was_moving = 0;
     }
     if (player && g_mv_active && !g_mv_busy && cfg.move_mode == 0) {      /* ordem antiga (ModoOrdem=0) */
         if (now - last_mv >= MOVE_REPEAT_MS && unit_pos(player, 0, &px, &py)) {
@@ -2008,12 +2611,14 @@ static void game_frame(void)
         last_mv = 0;
         g_mv_bin = -1;
     }
-    if (cfg.walktest && player && g_walk_log) {
+    /* inventory.bin pela Storm, uma vez, na thread do jogo (a Storm nao e chamada da thread do D2NXPad) */
+    if (player && g_nir < 0 && g_frames > 60) inv_layout_load();
+    if (player && g_walk_log) {
         DWORD path = rd32(player + U_PATH);
         lg("[WF] %lu pos %u.%05u,%u.%05u modo %lu gfx %lu dir %u alvo %u,%u mv %ld ordem %d,%d",
            now, rd16(path + 2), rd16(path), rd16(path + 6), rd16(path + 4), rd32(player + U_MODE),
            rd32(player + 0x44), rd8(path + 0x64), rd16(path + 0x10), rd16(path + 0x12), (long)g_mv_active, g_mv_tx, g_mv_ty);
-        if (cfg.walktest > 1) {
+        if (cfg.walktest > 1 || g_walk_log > 1) {
             char b[700]; int o = 0, k;
             for (k = 0x08; k < 0xC0; k += 4) o += snprintf(b + o, sizeof(b) - o, "%02X:%lX ", k, rd32(path + k));
             lg("[WP] %s", b);
@@ -2021,6 +2626,7 @@ static void game_frame(void)
     }
     drain_msgq();
     if (g_gp_menu.open) draw_cheat_menu();
+    else if (player && sort_button_visible()) draw_sort_button();
 }
 
 static void __cdecl frame_hook(void)
@@ -2247,7 +2853,7 @@ static void autowalk_acceptance(DWORD t)
     case 5: if (!stick_toward(4340.0f, 5444.0f, &lx, &ly) || in >= 15000) next = 6; break;
     case 6: if (!stick_toward(4480.0f, 5446.0f, &lx, &ly) || (g_level > 0 && !is_town(g_level)) || in >= 30000) next = 7; break;
     case 7: if (!stick_toward(4560.0f, 5446.0f, &lx, &ly) || in >= 8000) next = 8; break;   /* entra no campo */
-    case 8: press_a = 1; if (in >= 15000) next = 81; break;                     /* segura A */
+    case 8: press_a = 1; if (in >= 25000) next = 81; break;                     /* segura A (25 s: os monstros chegam) */
     case 81: press_x = 1; if (in >= 6000) next = 9; break;                      /* segura X */
     default: break;
     }
@@ -2262,6 +2868,14 @@ static void autowalk_acceptance(DWORD t)
     g_pad.down[B_X] = press_x;
     if (t - last_log >= 500 && phase > 0) {
         Target tg = find_target(1, 0);
+        int i, nm = 0; float dmin = 1e9f;
+        for (i = 0; i < g_nunits; i++)
+            if (g_units[i].type == 1 && g_units[i].mode != 0 && g_units[i].mode != 12 && !monster_is_ally(&g_units[i])) {
+                float d = sqrtf((g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py));
+                if (d < 25) nm++;
+                if (d < dmin) dmin = d;
+            }
+        if (phase >= 8) lg("[Aceite] monstros a 25: %d, mais perto %.1f, face %.2f,%.2f, unidades %d", nm, dmin, g_face_x, g_face_y, g_nunits);
         last_log = t;
         lg("[Aceite] t=%.1fs fase %d analogico %.2f,%.2f A=%d B=%d X=%d pos %.1f,%.1f modo %lu nivel %d painel %d mouse %ld,%ld alvo %s quadros %ld",
            t / 1000.0f, phase, lx, ly, press_a, press_b, press_x, g_px, g_py, g_player ? rd32(g_player + U_MODE) : 0, g_level,
@@ -2270,13 +2884,117 @@ static void autowalk_acceptance(DWORD t)
     }
 }
 
+/* Diagnostico (roteiro "dumpinv"): inventario de uma unidade como o jogo guarda (1.13c): unidade+0x60 = Inventory
+ * {+0x0C primeiro item, +0x14 grades, +0x18 numero de grades}; grade (0x10 bytes) {+0 item, +8 largura, +9 altura,
+ * +0xC celulas (Unit* por casa)}; item: +0x14 ItemData {+0x44 corpo, +0x45 local, +0x64 proximo, +0x69 pagina},
+ * +0x2C caminho {+0x0C x, +0x10 y}. */
+static void dump_inventory(DWORD unit, const char *who)
+{
+    DWORD inv = unit ? rd32(unit + 0x60) : 0, grids, it;
+    int ng, g, n = 0;
+    if (!inv) { lg("[Inv] %s: sem inventario", who); return; }
+    grids = rd32(inv + 0x14); ng = (int)rd32(inv + 0x18);
+    lg("[Inv] %s unidade %08lX inv %08lX assinatura %08lX grades %d", who, unit, inv, rd32(inv), ng);
+    for (g = 0; g < ng && g < 16; g++) {
+        DWORD gr = grids + g * 0x10, cells = rd32(gr + 0x0C);
+        int w = rd8(gr + 8), h = rd8(gr + 9), x, y;
+        DWORD ids[64]; int nid = 0;
+        lg("[Inv]   grade %d: %dx%d celulas %08lX", g, w, h, cells);
+        if (!cells || w <= 0 || h <= 0 || w > 32 || h > 32) continue;
+        for (y = 0; y < h; y++) {
+            char row[40];
+            for (x = 0; x < w; x++) {
+                DWORD c = rd32(cells + (y * w + x) * 4);
+                int k;
+                if (!c) { row[x] = '.'; continue; }
+                for (k = 0; k < nid && ids[k] != c; k++) ;
+                if (k == nid && nid < 64) ids[nid++] = c;
+                row[x] = (char)('A' + (k % 26));
+            }
+            row[w] = 0;
+            lg("[Inv]     %s", row);
+        }
+    }
+    for (it = rd32(inv + 0x0C); it && n < 120; n++) {
+        DWORD d = rd32(it + 0x14), path = rd32(it + 0x2C);
+        lg("[Inv]   item %08lX id %lu cls %lu corpo %u local %u pagina %u pos %lu,%lu modo %lu",
+           it, rd32(it + 0x0C), rd32(it + 4), rd8(d + 0x44), rd8(d + 0x45), rd8(d + 0x69),
+           rd32(path + 0x0C), rd32(path + 0x10), rd32(it + 0x10));
+        it = d ? rd32(d + 0x64) : 0;
+    }
+}
+
+/* Diagnostico (roteiro "snap" / "diff"): compara as secoes graváveis do D2Client entre dois momentos e registra
+ * DWORDs que mudaram (para achar variaveis como a aba da loja ou a caixa de confirmacao). */
+static BYTE *g_snap[2]; static DWORD g_snap_mod[2], g_snap_base[2], g_snap_size[2];
+static void mem_snap(void)
+{
+    int m;
+    for (m = 0; m < 2; m++) {
+        DWORD mod = m == 0 ? g_client : (DWORD)GetModuleHandleA("D2Sigma.dll");
+        IMAGE_NT_HEADERS32 *nt; IMAGE_SECTION_HEADER *sec; DWORD i, lo = 0, hi = 0;
+        if (!mod) continue;
+        nt = (IMAGE_NT_HEADERS32 *)(mod + ((IMAGE_DOS_HEADER *)mod)->e_lfanew);
+        sec = IMAGE_FIRST_SECTION(nt);
+        for (i = 0; i < nt->FileHeader.NumberOfSections; i++)
+            if (sec[i].Characteristics & IMAGE_SCN_MEM_WRITE) {
+                if (!lo || sec[i].VirtualAddress < lo) lo = sec[i].VirtualAddress;
+                if (sec[i].VirtualAddress + sec[i].Misc.VirtualSize > hi) hi = sec[i].VirtualAddress + sec[i].Misc.VirtualSize;
+            }
+        if (!lo) continue;
+        g_snap_mod[m] = mod; g_snap_base[m] = lo; g_snap_size[m] = (hi - lo) & ~3u;
+        if (!g_snap[m]) g_snap[m] = HeapAlloc(GetProcessHeap(), 0, g_snap_size[m]);
+        memcpy(g_snap[m], (BYTE *)mod + lo, g_snap_size[m]);
+    }
+}
+static void mem_diff(const char *tag)
+{
+    DWORD i; int n = 0, m;
+    for (m = 0; m < 2; m++) {
+        if (!g_snap[m]) continue;
+        for (i = 0; i < g_snap_size[m]; i += 4) {
+            DWORD a = *(DWORD *)(g_snap[m] + i), c = *(volatile DWORD *)(g_snap_mod[m] + g_snap_base[m] + i);
+            if (a != c && (a < 0x10000 || c < 0x10000 || (a & 0xFFF00000) != (c & 0xFFF00000)) && n < 800) {
+                lg("[Diff] %s %s+%lX: %lX -> %lX", tag, m ? "S" : "C", g_snap_base[m] + i, a, c); n++;
+            }
+        }
+    }
+    lg("[Diff] %s: %d mudancas", tag, n);
+}
+
+/* Diagnostico (roteiro "scanstart V" / "scanfilter V" / "scanlog"): procura DWORDs com o valor V em toda a memoria
+ * privada gravavel e vai filtrando (para achar variaveis no heap, como a aba da loja). */
+static DWORD *g_scan; static int g_nscan;
+static void mem_scan(DWORD v, int start)
+{
+    if (start) {
+        MEMORY_BASIC_INFORMATION mbi; DWORD a = 0x10000; int cap = 4000000;
+        if (!g_scan) g_scan = HeapAlloc(GetProcessHeap(), 0, cap * 4);
+        g_nscan = 0;
+        while (a < 0x7FFF0000 && VirtualQuery((void *)a, &mbi, sizeof(mbi))) {
+            DWORD base = (DWORD)mbi.BaseAddress, size = (DWORD)mbi.RegionSize, i;
+            if (mbi.State == MEM_COMMIT && (mbi.Type == MEM_PRIVATE || mbi.Type == MEM_IMAGE) &&
+                (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) && !(mbi.Protect & PAGE_GUARD))
+                for (i = 0; i + 4 <= size && g_nscan < cap; i += 4)
+                    if (*(volatile DWORD *)(base + i) == v) g_scan[g_nscan++] = base + i;
+            a = base + size;
+            if (!size) break;
+        }
+    } else {
+        int i, k = 0;
+        for (i = 0; i < g_nscan; i++) if (readable(g_scan[i], 4) && *(volatile DWORD *)g_scan[i] == v) g_scan[k++] = g_scan[i];
+        g_nscan = k;
+    }
+    lg("[Scan] valor %lu: %d candidatos", v, g_nscan);
+}
+
 /* AutoTest Script=<arquivo>: roteiro de teste que aperta os botoes do controle pelo mesmo caminho do XInput
  * (para testar menus/loja/inventario no emulador). Um comando por linha, depois que o personagem entra:
  *   wait <ms> | pad <Botao> [ms] | stick <lx> <ly> <ms> | rstick <rx> <ry> <ms> | key <TECLA> | move <x> <y>
  *   click | rclick | npc [cls] (anda ate o NPC mais perto e aperta B) | waitpanel <id hex> <ms> | mark <texto> | log */
 static struct {
     char lines[200][80]; int n, i, on;
-    DWORD until, hold_until; int hold_b; float lx, ly, rx, ry; int npc, npc_cls; DWORD npc_t0;
+    DWORD until, hold_until; int hold_b; float lx, ly, rx, ry; int npc, npc_cls, npc_type; DWORD npc_t0; int walk; float wx, wy; int hold_mask;
 } g_scr;
 static void script_load(const char *rel)
 {
@@ -2317,29 +3035,40 @@ static void script_tick(void)
     DWORD now = GetTickCount();
     if (!g_scr.on) return;
     if (g_scr.hold_b >= 0) {
-        if (now < g_scr.hold_until) g_pad.down[g_scr.hold_b] = 1;
-        else g_scr.hold_b = -1;
+        if (now < g_scr.hold_until) { int k; for (k = 0; k < B_COUNT; k++) if (g_scr.hold_mask & (1 << k)) g_pad.down[k] = 1; }
+        else { g_scr.hold_b = -1; g_scr.hold_mask = 0; }
     }
     if (now < g_scr.hold_until && (g_scr.lx || g_scr.ly || g_scr.rx || g_scr.ry)) {
         g_pad.lx = g_scr.lx; g_pad.ly = g_scr.ly; g_pad.rx = g_scr.rx; g_pad.ry = g_scr.ry;
     } else { g_scr.lx = g_scr.ly = g_scr.rx = g_scr.ry = 0; }
     g_pad.connected = 1;
+    if (g_scr.walk) {                                      /* walkto x y: analogico ate o ponto (8 s no maximo) */
+        float lx = 0, ly = 0;
+        if (now - g_scr.npc_t0 < 8000 && stick_toward(g_scr.wx, g_scr.wy, &lx, &ly)) { g_pad.lx = lx; g_pad.ly = ly; return; }
+        lg("[Script] walkto: pos %.1f,%.1f", g_px, g_py);
+        g_scr.walk = 0; g_scr.until = now + 300;
+        return;
+    }
     if (g_scr.npc) {                                       /* anda ate o NPC mais perto e interage */
         int i, best = -1; float bd = 1e9f, lx = 0, ly = 0;
         for (i = 0; i < g_nunits; i++)
-            if (g_units[i].type == 1 && (g_units[i].flags & 0x2) && !monster_is_ally(&g_units[i]) &&
+            if (g_units[i].type == g_scr.npc_type && (g_units[i].type == 2 || ((g_units[i].flags & 0x2) && !monster_is_ally(&g_units[i]))) &&
                 (!g_scr.npc_cls || g_units[i].cls == g_scr.npc_cls)) {
                 float d = (g_units[i].x - g_px) * (g_units[i].x - g_px) + (g_units[i].y - g_py) * (g_units[i].y - g_py);
                 if (d < bd) { bd = d; best = i; }
             }
-        if (best >= 0 && bd > 25.0f && now - g_scr.npc_t0 < 20000) {
-            stick_toward(g_units[best].x, g_units[best].y, &lx, &ly);
-            g_pad.lx = lx; g_pad.ly = ly;
-            return;
+        {   /* travado (obstaculo no caminho reto) por 1,5 s: para e deixa o B achar o caminho */
+            static float spx, spy; static DWORD st;
+            if (fabsf(g_px - spx) + fabsf(g_py - spy) > 0.5f) { spx = g_px; spy = g_py; st = now; }
+            if (best >= 0 && bd > 25.0f && now - g_scr.npc_t0 < 20000 && !(bd < 121.0f && now - st > 1500)) {
+                stick_toward(g_units[best].x, g_units[best].y, &lx, &ly);
+                g_pad.lx = lx; g_pad.ly = ly;
+                return;
+            }
         }
         lg("[Script] npc: cls %d a %.1f", best >= 0 ? g_units[best].cls : -1, sqrtf(bd));
         g_scr.npc = 0;
-        g_scr.hold_b = B_B; g_scr.hold_until = now + 200; g_scr.until = now + 1500;
+        g_scr.hold_b = B_B; g_scr.hold_mask = 1 << B_B; g_scr.hold_until = now + 200; g_scr.until = now + 1500;
         return;
     }
     if (now < g_scr.until) return;
@@ -2352,23 +3081,94 @@ static void script_tick(void)
         g_scr.until = now + 50;
         if (!lstrcmpiA(c, "wait")) g_scr.until = now + atoi(a1);
         else if (!lstrcmpiA(c, "pad")) {
-            int b = btn_from_name(a1), ms = a2[0] ? atoi(a2) : 150;
-            if (b >= 0) { g_scr.hold_b = b; g_scr.hold_until = now + ms; g_scr.until = now + ms + 250; }
+            int ms = a2[0] ? atoi(a2) : 150, b = -1;
+            char *tok = strtok(a1, "+");
+            g_scr.hold_mask = 0;
+            while (tok) { b = btn_from_name(tok); if (b >= 0) g_scr.hold_mask |= 1 << b; tok = strtok(NULL, "+"); }
+            if (g_scr.hold_mask) { g_scr.hold_b = b; g_scr.hold_until = now + ms; g_scr.until = now + ms + 250; }
         } else if (!lstrcmpiA(c, "stick") || !lstrcmpiA(c, "rstick")) {
             int ms = atoi(a3);
             if (c[0] == 's' || c[0] == 'S') { g_scr.lx = (float)atof(a1); g_scr.ly = (float)atof(a2); }
             else { g_scr.rx = (float)atof(a1); g_scr.ry = (float)atof(a2); }
             g_scr.hold_until = now + ms; g_scr.until = now + ms + 100;
         } else if (!lstrcmpiA(c, "key")) { int vk = key_from_name(a1); if (vk) tap_key(vk, 0); g_scr.until = now + 300; }
+        else if (!lstrcmpiA(c, "moveg")) { int ok = move_cursor_exact((float)atof(a1), (float)atof(a2)); script_log_state(ok ? "moveg ok" : "moveg ERRO"); g_scr.until = now + 200; }
         else if (!lstrcmpiA(c, "move")) { move_cursor((float)atof(a1), (float)atof(a2)); g_scr.until = now + 200; }
         else if (!lstrcmpiA(c, "click")) { click(0, 0); g_scr.until = now + 300; }
         else if (!lstrcmpiA(c, "rclick")) { click(1, 0); g_scr.until = now + 300; }
-        else if (!lstrcmpiA(c, "npc")) { g_scr.npc = 1; g_scr.npc_cls = atoi(a1); g_scr.npc_t0 = now; }
+        else if (!lstrcmpiA(c, "npc") || !lstrcmpiA(c, "obj")) { g_scr.npc = 1; g_scr.npc_cls = atoi(a1); g_scr.npc_t0 = now; g_scr.npc_type = (c[0] == 'o' || c[0] == 'O') ? 2 : 1; }
         else if (!lstrcmpiA(c, "waitpanel")) {
             int id = (int)strtol(a1, NULL, 16); DWORD t = atoi(a2);
             if (!ui_open(id) && t > 100) { snprintf(g_scr.lines[--g_scr.i], 80, "waitpanel %s %lu", a1, t - 100); g_scr.until = now + 100; }
         } else if (!lstrcmpiA(c, "mark")) { lg("[Script] MARCA %s", l + 5); script_log_state("estado"); g_scr.until = now + 1200; }
         else if (!lstrcmpiA(c, "log")) script_log_state("estado");
+        else if (!lstrcmpiA(c, "npcopt")) {   /* opcao i do menu do NPC pelo retangulo do jogo (+0x11963C) */
+            int i = atoi(a1), top = (int)rd32(g_client + 0x119640), l = (int)rd32(g_client + 0x11963C), r = (int)rd32(g_client + 0x119644);
+            move_cursor_exact((l + r) / 2.0f, top + 12 + i * 17.6f);
+            script_log_state("npcopt");
+        }
+        else if (!lstrcmpiA(c, "objs")) {
+            int k;
+            for (k = 0; k < g_nunits; k++)
+                if (g_units[k].type == 2) lg("[Script] objeto cls %d modo %d em %.0f,%.0f (delta %.0f,%.0f)", g_units[k].cls, g_units[k].mode,
+                                              g_units[k].x, g_units[k].y, g_units[k].x - g_px, g_units[k].y - g_py);
+        }
+        else if (!lstrcmpiA(c, "scanstart")) mem_scan(strtoul(a1, NULL, 0), 1);
+        else if (!lstrcmpiA(c, "scanfilter")) mem_scan(strtoul(a1, NULL, 0), 0);
+        else if (!lstrcmpiA(c, "scanlog")) {
+            int k;
+            for (k = 0; k < g_nscan && k < 60; k++) {
+                MEMORY_BASIC_INFORMATION mbi; char mod[64] = "";
+                VirtualQuery((void *)g_scan[k], &mbi, sizeof(mbi));
+                if (mbi.Type == MEM_IMAGE) GetModuleFileNameA((HMODULE)mbi.AllocationBase, mod, sizeof(mod));
+                lg("[Scan] %08lX (base %08lX %s)", g_scan[k], (DWORD)mbi.AllocationBase, mod);
+            }
+        }
+        else if (!lstrcmpiA(c, "scanptr")) {   /* ponteiros (nos modulos e 1 nivel no heap) para perto de cada candidato */
+            static const char *mods[] = { "D2Client.dll", "D2Common.dll", "D2Sigma.dll", "D2Win.dll", "D2Game.dll", "D2Lang.dll" };
+            int k, m;
+            for (k = 0; k < g_nscan && k < 8; k++) {
+                DWORD t = g_scan[k];
+                for (m = 0; m < 6; m++) {
+                    DWORD mod = (DWORD)GetModuleHandleA(mods[m]), i;
+                    IMAGE_NT_HEADERS32 *nt; IMAGE_SECTION_HEADER *sec; unsigned j;
+                    if (!mod) continue;
+                    nt = (IMAGE_NT_HEADERS32 *)(mod + ((IMAGE_DOS_HEADER *)mod)->e_lfanew);
+                    sec = IMAGE_FIRST_SECTION(nt);
+                    for (j = 0; j < nt->FileHeader.NumberOfSections; j++) {
+                        if (!(sec[j].Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+                        for (i = sec[j].VirtualAddress; i + 4 <= sec[j].VirtualAddress + sec[j].Misc.VirtualSize; i += 4) {
+                            DWORD v = *(volatile DWORD *)(mod + i);
+                            if (v <= t && t - v < 0x2000) lg("[Scan] %08lX <- %s+%lX = %08lX (+%lX)", t, mods[m], i, v, t - v);
+                            else if (v > 0x10000 && readable(v, 0x400)) {   /* um nivel: modulo -> bloco -> ponteiro perto */
+                                DWORD q;
+                                for (q = 0; q < 0x400; q += 4) {
+                                    DWORD w = *(volatile DWORD *)(v + q);
+                                    if (w <= t && t - w < 0x400 && w > 0x10000)
+                                        lg("[Scan] %08lX <- [%s+%lX]+%lX = %08lX (+%lX)", t, mods[m], i, q, w, t - w);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        else if (!lstrcmpiA(c, "wflog")) InterlockedExchange(&g_walk_log, atoi(a1));
+        else if (!lstrcmpiA(c, "walkto")) { g_scr.walk = 1; g_scr.wx = (float)atof(a1); g_scr.wy = (float)atof(a2); g_scr.npc_t0 = now; }
+        else if (!lstrcmpiA(c, "goto")) {   /* goto <tipo> <cls>: o jogo acha o caminho (comando 4) e interage ao chegar */
+            int k, t = atoi(a1), cl = atoi(a2);
+            for (k = 0; k < g_nunits; k++)
+                if (g_units[k].type == t && g_units[k].cls == cl) {
+                    native_queue(NC_RUN_TO_UNIT, (DWORD)t, unit_id(g_units[k].unit));
+                    g_pend_unit = g_units[k].unit; g_pend_t = now; g_pend_near = 0;
+                    lg("[Script] goto: tipo %d cls %d", t, cl);
+                    break;
+                }
+            g_scr.until = now + 4000;
+        }
+        else if (!lstrcmpiA(c, "snap")) mem_snap();
+        else if (!lstrcmpiA(c, "diff")) mem_diff(a1);
+        else if (!lstrcmpiA(c, "dumpinv")) { dump_inventory(g_player, "jogador"); if (g_last_npc) dump_inventory(g_last_npc, "npc"); }
     }
 }
 
@@ -2547,14 +3347,31 @@ static void tick(float dt)
         if (step == 0 && now - t_in > 6000) { lg("[CursorTest] abrindo inventario (I)"); tap_key('I', 0); step = 1; }
         else if (step == 1 && now - t_in > 14000) { lg("[CursorTest] fechando inventario (I)"); tap_key('I', 0); step = 2; }
     }
+    if (mode == M_PANEL && mode == g_mode) {
+        /* troca de painel sem voltar ao jogo (menu do NPC -> loja, bau...): cursor no primeiro item de novo */
+        DWORD sig = (ui_open(UI_NPCMENU) ? 1 : 0) | (ui_open(UI_NPCSHOP) ? 2 : 0) | (ui_open(UI_STASH) ? 4 : 0) |
+                    (ui_open(UI_CUBE) ? 8 : 0) | (ui_open(UI_INVENTORY) ? 16 : 0);
+        if (sig != g_panel_sig && g_panel_sig && !confirm_active()) { Sleep(120); nav_home(); }
+        if (g_home_due) {
+            if (GetTickCount() > g_home_due) g_home_due = 0;
+            else if (nav_build()) { g_home_due = 0; nav_home(); }
+        }
+        g_panel_sig = sig;
+    } else if (mode != M_PANEL) g_panel_sig = 0;
     if (mode != g_mode) {
         release_all();
         /* cada partida comeca com a preferencia do INI; L3 (tecla R) alterna depois */
         if (mode == M_GAME && g_mode == M_MENU) g_running_state = cfg.always_run;
         if (mode == M_GAME) park_cursor();
-        /* como no D2R: ao abrir o inventario o cursor vai para a primeira celula */
+        /* como no D2R: ao abrir um painel o cursor vai para o primeiro item/opcao (nav_home); sem geometria
+         * conhecida, o comportamento antigo */
         if (mode == M_PANEL && g_mode == M_GAME) {
-            if (!ui_open(UI_NPCSHOP) && (ui_open(UI_INVENTORY) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE)))
+            g_home_due = 0;
+            /* menu do NPC: o jogo preenche o retangulo no 1o desenho (o anterior pode ser de outro NPC) */
+            if (ui_open(UI_NPCMENU) && !ui_open(UI_NPCSHOP)) { g_home_due = GetTickCount() + 1500; g_nnt = 0; Sleep(150); }
+            nav_build();
+            if (g_nnt) { g_home_due = 0; nav_home(); }
+            else if (!ui_open(UI_NPCSHOP) && (ui_open(UI_INVENTORY) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE)))
                 move_cursor(g_resx / 2 + 17 + 14.5f, g_resy / 2 + 14 + 14.5f);
             else
                 move_cursor(g_resx / 2.0f, g_resy / 2.0f);
@@ -2722,6 +3539,11 @@ static void tick(float dt)
             else if (g_gp_menu.cur_item == 2 && g_gp_menu.unique_idx < (int)UNIQUE_COUNT - 1) g_gp_menu.unique_idx++;
             else if (g_gp_menu.cur_item == 3 && g_gp_menu.rare_idx < (int)RARE_COUNT - 1) g_gp_menu.rare_idx++;
             d2_render_gameplay_menu();
+        } else if (PRESSED(B_A) && g_gp_menu.cur_item == 6) {
+            /* organizar: na hora, sem salvar nada (abre o inventario se preciso) */
+            g_gp_menu.open = 0;
+            InterlockedExchange(&g_sort_req, 1);
+            lg("[GameplayMenu] Organizar inventario");
         } else if (PRESSED(B_A)) {
             apply_and_save_gameplay_menu();
             menu_status(L"Salvo. Vale a partir do proximo boot do jogo.");
@@ -2734,6 +3556,20 @@ static void tick(float dt)
         return;
     }
 
+    if (g_sort_req && g_player && !g_gp_menu.open) {
+        DWORD t0 = GetTickCount();
+        InterlockedExchange(&g_sort_req, 0);
+        if (!ui_open(UI_INVENTORY)) {
+            if (left_panel_open()) tap_key(VK_ESCAPE, 0);
+            Sleep(150);
+            tap_key('I', 0);
+            while (!ui_open(UI_INVENTORY) && GetTickCount() - t0 < 2000) Sleep(30);
+            Sleep(250);
+        }
+        if (sort_button_visible()) sort_inventory();
+        else lg("organizar: inventario nao abriu");
+        return;
+    }
     /* direcao em que o heroi olha */
     if (sqrtf(g_pad.rx * g_pad.rx + g_pad.ry * g_pad.ry) > 0.5f) {
         g_face_x = g_pad.rx; g_face_y = g_pad.ry; g_face_valid = 1;

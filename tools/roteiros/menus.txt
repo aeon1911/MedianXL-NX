@@ -1,0 +1,101 @@
+# Aceitacao dos menus pelo direcional (tools/run_menus_ryujinx.sh). Tudo pelos botoes do controle.
+# (o jogo ignora teclas nos primeiros segundos: o Enter atrasado do menu ainda esta na fila)
+wait 11000
+# inventario: abre (Y), cursor no 1o item, direcional
+pad Y
+wait 1500
+mark inv_home
+pad Up
+wait 400
+pad Up
+wait 400
+pad Down
+wait 400
+mark inv_nav
+pad B
+wait 1000
+# NPC: B ate a Akara, baixo = TRADE, A abre a loja
+npc 148
+waitpanel 08 6000
+wait 1000
+mark npc_home
+pad Down
+wait 300
+pad A
+waitpanel 0C 4000
+wait 1500
+mark loja_home
+dumpinv
+# compra: A abre a caixa (cursor no Sim); baixo + A = Nao; A, B = Nao; A, A = Sim
+pad A
+wait 900
+mark caixa1
+pad Down
+wait 300
+pad A
+wait 900
+pad A
+wait 900
+pad B
+wait 900
+mark loja_ainda_aberta
+pad A
+wait 900
+pad A
+wait 1200
+pad Down
+wait 300
+pad A
+wait 900
+pad A
+wait 1200
+mark comprou
+dumpinv
+pad B
+wait 1500
+# espalha os itens e organiza pelo botao ao lado do inventario
+pad Y
+wait 1500
+moveg 565 344
+click
+wait 500
+moveg 826 460
+click
+wait 500
+moveg 565 402
+click
+wait 500
+moveg 942 373
+click
+wait 800
+mark baguncado
+dumpinv
+moveg 448 345
+wait 400
+pad A
+wait 6000
+mark organizado_botao
+dumpinv
+# espalha de novo e organiza pelo menu de cheats (ZL + -, 6x baixo, A)
+moveg 565 344
+click
+wait 500
+moveg 826 460
+click
+wait 800
+pad B
+wait 1000
+pad ZL+Minus 200
+wait 800
+pad Down
+pad Down
+pad Down
+pad Down
+pad Down
+pad Down
+wait 400
+pad A
+wait 6000
+mark organizado_menu
+dumpinv
+wait 1000

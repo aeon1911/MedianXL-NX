@@ -175,3 +175,40 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
   conferidas byte a byte, `assemble_sd_tree.py` monta `dist/sd-card`). A saída do `prepare_game.py` é
   idêntica, byte a byte, à pasta validada no Ryujinx. O `assemble_sd_tree.py` não grava mais arquivos do
   jogo em `sd-card/`.
+
+### J. 24/10/2026 — herói tremendo nas diagonais, menus pelo direcional, Sim/Não da loja, Organizar
+- **Tremida/"passinhos"**: o jogo guarda a direção em 64 passos de 5,625° e arredonda para baixo a partir de 45°
+  no mundo (medido com `WalkTest`, cada quadro: posição, modo, direção do caminho). As 8 direções principais do
+  analógico caem exatamente na fronteira entre duas direções; com o alvo a ~5 subtiles recalculado a cada 130 ms,
+  a direção alternava (31/32...) a cada passo e o sprite trocava de lado. Agora: direção do analógico suavizada,
+  encaixada no **centro** de uma das 64 direções com histerese, alvo a 18 subtiles exatamente nessa direção e
+  ordem renovada só quando precisa (mudou a direção, alvo perto, parou, andar↔correr com histerese). Idas-e-voltas
+  de direção em linha reta, com ruído de analógico: 67 → 8 (as que restam são desvios de obstáculo).
+  `[Movimento] ModoOrdem=0` volta à ordem antiga. Teste: `tools/run_walk_test_ryujinx.sh`.
+- **Interação**: um toque no B termina a interação (antes era preciso segurar). O "interagir" só é mandado com o
+  herói parado ao lado do alvo, e uma ação na fila cancela o "pare aqui" do analógico solto: mandados no meio do
+  caminho, desfaziam a interação no servidor e o TRADE fechava o menu do NPC (5/5 depois da correção).
+- **Cursor exato** (`move_cursor_exact`): o D2GL converte a janela para o jogo numa área 4:3 (pedir x=577 levava o
+  mouse a 598). O D2NXPad aprende o mapa de cada eixo lendo o mouse do jogo e corrige; só aprende quando o jogo
+  processou o movimento e descarta medidas incoerentes. O cursor livre dos analógicos e o AutoJoin não mudaram.
+- **Direcional nos painéis**: geometria do `inventory.bin` que o jogo carrega (lido pela Storm na thread do jogo) e
+  ocupação de cada casa pela grade da unidade (`Inventory+0x14`; grade 2 = inventário, 5 = cubo, 6 = baú; na loja,
+  grade 2 + aba do NPC). Um alvo por item (um item 2x3 é um passo), por casa vazia, equipamentos, abas e botões; o
+  passo escolhe o alvo mais perto na direção, preferindo o alinhado. Ao abrir um painel o cursor vai ao primeiro
+  item. Aba da loja do Median XL: `[D2Sigma+0x33DAE8]+0x10`. Menu do NPC: retângulo em `D2Client+0x11963C`
+  (esq, topo, dir, base), opções a cada 17,6 px. Achados no Ryujinx com os comandos `snap/diff/scan` do roteiro.
+- **Sim/Não da compra**: a caixa (só na compra, a venda não pergunta) fica centralizada no painel da loja (Sim
+  256,214; Não 256,228) e não aceita teclado (ESC fecha a loja, Enter abre o chat). O D2NXPad sabe que ela abriu
+  porque o A foi num item da aba atual: cursor no Sim, direcional alterna, B = Não sem fechar a loja, e depois o
+  cursor volta ao item.
+- **Organizar inventário**: botão desenhado à esquerda do inventário e opção no menu de cheats, na hora. Cada passo
+  é um clique do jogo (pegar/soltar) conferido na grade; maiores primeiro, por coluna, iguais juntos; se faltar
+  espaço para abrir caminho, para (inventário válido); B cancela.
+- **Testes**: `tools/run_menus_ryujinx.sh` (16 critérios, só botões do controle) e `tools/run_script_ryujinx.sh`
+  com roteiros em `tools/roteiros/` (pad, stick, npc, goto, walkto, moveg, npcopt, dumpinv, snap/diff, scan).
+- Observado e não alterado: nos primeiros ~8 s depois de entrar no jogo as teclas são ignoradas até o Enter
+  atrasado do menu ser consumido (o chat abre e o D2NXPad fecha); depois disso Y/I funcionam.
+- **Aceitação (`run_acceptance_ryujinx.sh`)**: a fase de segurar A no campo passou de 15 para 25 s e o log registra
+  quantos monstros estão a 25 subtiles. O critério "A troca de alvo" depende de algum monstro chegar até a entrada do
+  campo; numa rodada que falhou, o mais perto ficou a 47 subtiles os 25 s inteiros (o A golpeou à frente, como deve).
+  Nas rodadas com monstros por perto o A achou e trocou de alvo.

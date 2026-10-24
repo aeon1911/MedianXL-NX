@@ -72,6 +72,16 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
 - `−` no menu não manda ESC; saves ficam em `drive_c/users/steamuser/AppData/Roaming/MedianXL/save`
   (`d2nxpad.log` lista cada save).
 
+## 24/10/2026 — movimento sem tremida, menus pelo direcional, Sim/Não da loja, Organizar (detalhes: D2PAD_CHANGES J)
+- Direção do jogo: 64 passos, `floor((atan2(dy,dx)-45°)/5,625°)`; ordem de andar encaixada no centro (ModoOrdem=1).
+- `move_cursor_exact` (mapa aprendido lendo o mouse do jogo) só para navegação/loja/organizar; o resto usa o mapa antigo.
+- Memória achada: grade da unidade `Inventory+0x14` (2 inventário, 5 cubo, 6 baú; loja = NPC grade 2+aba), cursor
+  com item `Inventory+0x20`, aba da loja `[D2Sigma+0x33DAE8]+0x10`, menu do NPC `D2Client+0x11963C` (l,t,r,b).
+- Caixa Sim/Não (só compra): Sim 256,214 / Não 256,228 (1024x768), não aceita teclado.
+- Storm só na thread do jogo (inventory.bin carregado no game_frame). "interagir" só com o herói parado ao lado.
+- Roteiros de botões: `tools/run_script_ryujinx.sh <roteiro>` (comandos em script_tick); aceitação dos menus:
+  `tools/run_menus_ryujinx.sh` (16 critérios). Nos ~8 s após entrar no jogo as teclas são ignoradas (Enter atrasado).
+
 ## Testes
 - `tools/run_item_test_ryujinx.sh`: usa o personagem de `build/fresh-test-saves` (rodar antes o fresh test),
   `ReadTest=1` (CRC de `holy_ding.wav` pela Storm = 20ec3821) + `ItemTest=2` (clica no item de ouro em 856,496).

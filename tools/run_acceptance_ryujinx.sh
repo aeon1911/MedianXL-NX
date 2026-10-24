@@ -1,7 +1,8 @@
 #!/bin/bash
 # Testes de aceitacao do RULES.md (NATIVE ANALOG MOVEMENT) no Ryujinx, com criterios avaliados pelo log.
 #  1) AutoWalk=2: o D2NXPad injeta analogico/botoes como o controle (zona morta, inclinacao leve, soltar,
-#     diagonal, ir ate o NPC e apertar B, sair da cidade, segurar A no campo, segurar X).
+#     diagonal, ir ate o NPC e apertar B, sair da cidade, segurar A no campo por 25 s (os monstros nascem em
+#     lugares diferentes a cada partida e precisam de tempo para chegar), segurar X).
 #  2) MenuTest=1: abre o menu de cheats com ZL+-, navega, aplica com A e fecha com B.
 # Usa o personagem de teste do SD (AutoJoin). Capturas da janela em build/acceptance-shots/ (xprop+import).
 # Limite: o controle fisico do Switch nao e testado aqui (a entrada e injetada no mesmo ponto do XInput).
@@ -46,7 +47,7 @@ run() {   # $1 = nome, $2 = linhas extras do [AutoTest], $3 = segundos no jogo
     grep -c 'Unhandled exception' "$ROOT/ryu.log" > "$SHOTS/$1.crash"
 }
 
-run cenario "AutoWalk=2" 75
+run cenario "AutoWalk=2" 85
 run menu "MenuTest=1" 26
 sed -i '/^MenuTest=/d; s/^AutoJoin=.*/AutoJoin=0/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
 python3 tools/assemble_sd_tree.py >/dev/null 2>&1   # devolve ini e tabelas do SD de teste (o menu aplicou)

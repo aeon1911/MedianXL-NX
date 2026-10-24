@@ -101,20 +101,34 @@ nada de mouse, cursor ou clique simulado. Dentro do jogo o cursor fica oculto en
 
 | Botão / Alavanca | Ação no Diablo II / Median XL |
 |---|---|
-| **Analógico esquerdo** | Movimento direto na direção apontada. Inclinação leve anda, inclinação forte corre; soltar para o herói. Zona morta em `[Movimento] ZonaMortaEsquerda`, ponto de correr em `IntensidadeCorrer`. |
+| **Analógico esquerdo** | Movimento direto na direção apontada. Inclinação leve anda, inclinação forte corre; soltar para o herói. A direção é encaixada numa das 64 direções do jogo (o herói não treme nas diagonais). Zona morta em `[Movimento] ZonaMortaEsquerda`, ponto de correr em `IntensidadeCorrer`. |
 | **Analógico direito** | Direção de mira para atacar/lançar sem alvo. |
 | **A** | Ataque (habilidade esquerda) no monstro mais próximo detectado na tela; segurando, repete a cada golpe e troca de alvo quando ele morre. Sem monstro (fora da cidade), golpeia à frente. |
 | **X** | Habilidade direita no monstro detectado (ou à frente). |
-| **B** | Interagir: vai até o NPC, baú, portal ou item mais próximo e interage. |
+| **B** | Interagir: vai até o NPC, baú, portal ou item mais próximo e interage (um toque basta). |
 | **Y** | Inventário (`I`). |
 | **L** (segurar) | Mostrar itens no chão (`Alt`). |
 | **R / ZR** | Habilidades 4 / 5 (tecla F4/F5 + habilidade direita no alvo). |
 | **ZL** (segurar) | Camada: Y/A/X = habilidades 6/7/8, B = ataque, D-pad = Shift+1..4. |
 | **Plus (+)** | Toque: menu do jogo (`ESC`). Segurando: atalhos (Y inventário, X personagem, A habilidades, B missões...). |
 | **Minus (−)** | Automapa (`Tab`). |
-| **ZL + − (ou − + +)** | **Menu de cheats** (XP, runas, únicos, raros). Direcional escolhe/altera, **A** aplica, **B** fecha. Vale a partir do próximo boot do jogo. |
+| **ZL + − (ou − + +)** | **Menu de cheats** (XP, runas, únicos, raros, **Organizar inventário**). Direcional escolhe/altera, **A** aplica, **B** fecha. Os multiplicadores valem a partir do próximo boot; o Organizar é na hora. |
 | **R3** | Trocar armas (`W`). |
 | **D-Pad** | Cinto: poções 1–4. |
+
+### Com um painel aberto (inventário, baú, cubo, loja, menu do NPC)
+
+O cursor aparece e vai sozinho para o primeiro item (ou para a primeira opção do NPC).
+
+| Botão | Ação |
+|---|---|
+| **Direcional** | Pula de item em item / casa em casa (um item grande é um passo só), entre a grade e os equipamentos, entre a loja/baú e o inventário; no menu do NPC, de opção em opção. |
+| **Analógicos** | Cursor livre (para arrastar e arrumar itens à mão). |
+| **A** | Clique (pegar/soltar item, escolher a opção do NPC). Na **loja**, A num item abre a caixa **Sim/Não** com o cursor já no **Sim**: A de novo compra; o direcional passa para **Não**; **B** = Não (a loja continua aberta). |
+| **Y / ZR** | Clique direito (usar item; na loja, comprar direto). |
+| **X** | Shift + clique. |
+| **B / +** | Fechar o painel (`ESC`). |
+| **Organizar** | Botão desenhado à esquerda do inventário (chegue com o direcional para a esquerda ou o cursor e aperte **A**): arruma o inventário na hora, maiores primeiro, por coluna; **B** cancela. Também no menu de cheats. |
 
 ### Fora da partida (menu principal, seleção e criação de personagem)
 
