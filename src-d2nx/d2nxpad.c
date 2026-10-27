@@ -96,7 +96,7 @@ static struct {
     int nav_step, nav_delay, nav_rate;
     int panel_shift;
     int skill_delay_ms;
-    int autojoin, autowalk, autocreate, cursortest, menutest, itemtest, item_x, item_y, readtest, item_delay, walktest;
+    int autojoin, autowalk, autocreate, cursortest, menutest, skilltest, itemtest, item_x, item_y, readtest, item_delay, walktest;
     int move_mode;
     float walk_noise;
     float xp_multiplier, rune_multiplier, unique_multiplier, rare_multiplier;
@@ -203,6 +203,8 @@ static const char *default_ini =
 "Up=KEY:SHIFT+4\n"
 "\n"
 "; segurando + (toque rapido no + = ESC/menu do jogo)\n"
+"; + e ZR / + e ZL = seletor de habilidades da mao direita / esquerda: o cursor aparece so nele,\n"
+"; no 1o icone do lado aberto; direcional pula de icone em icone, analogico move livre, A escolhe, B fecha\n"
 "[Jogo.Mais]\n"
 "Y=KEY:I\n"
 "X=KEY:C\n"
@@ -384,6 +386,7 @@ static void load_config(void)
     cfg.autocreate = ini_int("AutoTest", "AutoCreate", 0);
     cfg.cursortest = ini_int("AutoTest", "CursorTest", 0);
     cfg.menutest = ini_int("AutoTest", "MenuTest", 0);
+    cfg.skilltest = ini_int("AutoTest", "SkillTest", 0);
     cfg.itemtest = ini_int("AutoTest", "ItemTest", 0);
     cfg.readtest = ini_int("AutoTest", "ReadTest", 0);
     cfg.item_x = ini_int("AutoTest", "ItemX", 0);
@@ -948,6 +951,14 @@ static int ui_open(int id)
     if (!g_ver || !g_ver->ui_vars) return 0;
     return rd32(g_client + g_ver->ui_vars + id * 4) != 0;
 }
+/* habilidade de cada mao (1.13c): unidade +0xA8 = Info { jogo, primeira, esquerda +0x08, direita +0x0C };
+ * Skill +0x00 = linha do Skills.txt, cujo WORD +0x00 e o id da habilidade (diagnostico do SkillTest) */
+static int hand_skill(int right)
+{
+    DWORD info = g_player ? rd32(g_player + 0xA8) : 0, sk = info ? rd32(info + (right ? 0x0C : 0x08)) : 0;
+    DWORD txt = sk ? rd32(sk) : 0;
+    return txt ? rd16(txt) : -1;
+}
 
 typedef struct { DWORD unit; int type, cls, mode; DWORD flags; float x, y; } UnitInfo;
 
@@ -1227,14 +1238,35 @@ static void click(int right, int mods)
     key_mods(mods, 0);
 }
 
+static int g_popup_side = 1;   /* lado do ultimo seletor de habilidades aberto (1 = direito) */
+/* Seletor de habilidades do Median XL (painel 0x03), medido nas capturas do Ryujinx em 1024x768: os dois lados
+ * abrem juntos, a lista da mao esquerda alinhada a esquerda (1o icone em x=75) e a da direita alinhada a direita
+ * (1o em res_x-74), linha de baixo em res_y-178, icones com passo de 50,5 px e linhas empilhadas para cima. O
+ * jogo monta a lista ao desenhar, entao os alvos do direcional sao a grade inteira: A numa casa vazia so fecha. */
+#define SKG_STEP 50.5f
+#define SKG_ROWS 4
+static float skg_x0(int right) { return right ? g_resx - 74.0f : 75.0f; }
+static float skg_y0(void) { return g_resy - 178.0f; }
 static void do_popup(int right)
 {
-    /* botoes de habilidade ficam nos cantos inferiores do painel de controle */
-    float gx = right ? g_resx / 2.0f + 117 : g_resx / 2.0f - 117;
-    float gy = g_resy - 24.0f;
-    move_cursor(gx, gy);
-    Sleep(30);
-    click(0, 0);
+    /* botoes de habilidade do painel de controle do Median XL (1024x768), medidos na captura do Ryujinx:
+     * centros em (res/2 - 261, res_y - 30) e (res/2 + 307, res_y - 30). Antes: +-117 (fora dos botoes) */
+    float gx = right ? g_resx / 2.0f + 307 : g_resx / 2.0f - 261;
+    float gy = g_resy - 30.0f;
+    int cx, cy, ok;
+    if (!g_hwnd) return;
+    g_popup_side = right;
+    ok = move_cursor_exact(gx, gy);
+    game_to_client(g_curx, g_cury, &cx, &cy);
+    /* em partida o jogo trata o botao pelo mouse do quadro: apertar e soltar em quadros diferentes com o
+     * mouse parado sobre o botao */
+    Sleep(80);
+    PostMessageA(g_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(cx, cy));
+    Sleep(80);
+    PostMessageA(g_hwnd, WM_LBUTTONUP, 0, MAKELPARAM(cx, cy));
+    Sleep(120);
+    lg("seletor de habilidades: botao %s (%.0f,%.0f, cursor %s) -> seletor %d", right ? "direito" : "esquerdo", gx, gy,
+       ok ? "exato" : "APROXIMADO", ui_open(UI_MINISKILL));
 }
 
 static Act binding(int ctx, int b)
@@ -1572,7 +1604,7 @@ static int shop_page(void)
 #define SORT_BTN_Y1 358.0f
 static int sort_button_visible(void);
 static void menu_status(const wchar_t *msg);
-enum { NT_CELL, NT_ITEM, NT_LOC, NT_TAB, NT_OPT, NT_YES, NT_NO, NT_BTN };
+enum { NT_CELL, NT_ITEM, NT_LOC, NT_TAB, NT_OPT, NT_YES, NT_NO, NT_BTN, NT_SKILL };
 typedef struct { float x, y, x0, y0, x1, y1; int kind, area; } NavT;
 static NavT g_nt[700];
 static int g_nnt;
@@ -1661,6 +1693,17 @@ static int nav_build(void)
     int inv_panel = ui_open(UI_INVENTORY) || ui_open(UI_NPCSHOP) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE);
     g_nnt = 0;
     if (!g_player || g_resx != 1024 || g_resy != 768) return 0;   /* geometria medida no Median XL 1024x768 */
+    if (ui_open(UI_MINISKILL)) {                                    /* seletor de habilidades: a grade de icones */
+        int side, i, r;
+        for (side = 0; side < 2; side++)
+            for (r = 0; r < SKG_ROWS; r++)
+                for (i = 0; ; i++) {
+                    float x = skg_x0(side) + (side ? -i : i) * SKG_STEP, y = skg_y0() - r * SKG_STEP;
+                    if (side ? x < g_resx / 2.0f + SKG_STEP / 2 : x > g_resx / 2.0f - SKG_STEP / 2) break;
+                    nav_add(x - 24, y - 24, x + 24, y + 24, NT_SKILL, side);
+                }
+        return 1;
+    }
     if (confirm_active()) {
         nav_add(CONFIRM_YES_X - 30, CONFIRM_YES_Y - 6, CONFIRM_YES_X + 30, CONFIRM_YES_Y + 6, NT_YES, 1);
         nav_add(CONFIRM_YES_X - 30, CONFIRM_NO_Y - 6, CONFIRM_YES_X + 30, CONFIRM_NO_Y + 6, NT_NO, 1);
@@ -1739,6 +1782,7 @@ static void nav_home(void)
     int i, best = -1, want_area = (ui_open(UI_NPCSHOP) || ui_open(UI_STASH) || ui_open(UI_CUBE)) ? 1 : 0, pass;
     float bs = 1e9f;
     if (!nav_build()) return;
+    if (ui_open(UI_MINISKILL)) { move_cursor_exact(skg_x0(g_popup_side), skg_y0()); return; }   /* 1o icone do lado aberto */
     for (pass = 0; pass < 2 && best < 0; pass++)
         for (i = 0; i < g_nnt; i++) {
             const NavT *t = &g_nt[i];
@@ -1984,8 +2028,9 @@ static void start_action(int b, Act a)
     case A_SHIFTCLICK: click(0, 1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_CTRLCLICK: click(0, 2); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
     case A_SHIFTRCLICK: click(1, 1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
-    case A_POPUP_R: do_popup(1); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
-    case A_POPUP_L: do_popup(0); h->active = 0; if (g_mode == M_GAME) park_cursor(); break;
+    /* seletor aberto: o cursor fica (vira painel e vai ao 1o icone); se nao abriu, estaciona como antes */
+    case A_POPUP_R: do_popup(1); h->active = 0; if (g_mode == M_GAME && !ui_open(UI_MINISKILL)) park_cursor(); break;
+    case A_POPUP_L: do_popup(0); h->active = 0; if (g_mode == M_GAME && !ui_open(UI_MINISKILL)) park_cursor(); break;
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
     case A_TYPENAME: type_string("Switch"); h->active = 0; break;
     case A_KEYBOARD: if (g_mode == M_GAME) open_keyboard(); else ned_begin(NULL); h->active = 0; break;
@@ -2116,7 +2161,7 @@ static void ui_scan_tick(void)
 
 static int any_panel_open(void)
 {
-    static const int ids[] = { UI_INVENTORY, UI_CHARACTER, UI_SKILLTREE, UI_NPCMENU, UI_GAMEMENU, UI_CONFIG,
+    static const int ids[] = { UI_INVENTORY, UI_CHARACTER, UI_SKILLTREE, UI_NPCMENU, UI_GAMEMENU, UI_CONFIG, UI_MINISKILL,
                                UI_NPCSHOP, UI_ANVIL, UI_QUEST, UI_WAYPOINT, UI_PARTY, UI_TRADE, UI_STASH,
                                UI_CUBE, UI_HELP, UI_MERC, UI_MSGLOG, UI_SCROLL };
     unsigned i;
@@ -3285,7 +3330,7 @@ static void tick(float dt)
     }
     mode = !g_player ? M_MENU : any_panel_open() ? M_PANEL : M_GAME;
     if (mode != g_mode && g_player) {
-        static const int ids[] = { UI_INVENTORY, UI_CHARACTER, UI_SKILLTREE, UI_NPCMENU, UI_GAMEMENU, UI_CONFIG,
+        static const int ids[] = { UI_INVENTORY, UI_CHARACTER, UI_SKILLTREE, UI_NPCMENU, UI_GAMEMENU, UI_CONFIG, UI_MINISKILL,
                                    UI_NPCSHOP, UI_ANVIL, UI_QUEST, UI_WAYPOINT, UI_PARTY, UI_TRADE, UI_STASH,
                                    UI_CUBE, UI_HELP, UI_MERC, UI_MSGLOG, UI_SCROLL };
         char b[96] = "";
@@ -3498,6 +3543,44 @@ static void tick(float dt)
         g_pad.connected = 1;
     }
 
+    if (cfg.skilltest && g_player) {
+        /* AutoTest SkillTest=1: seletor de habilidades pelos botoes, como o jogador: + e ZR abre o da direita,
+         * o direcional escolhe, A grava; depois + e ZL para o da esquerda; por fim + e ZR, analogico move o
+         * cursor e B fecha sem escolher */
+        static DWORD t_in, last;
+        static const struct { DWORD t0, t1; int b; const char *what; } seq[] = {
+            { 10000, 10800, B_PLUS, "+" }, { 10300, 10500, B_ZR, "ZR (com +): seletor direito" },
+            { 14000, 14200, B_LEFT, "esquerda" }, { 16000, 16200, B_A, "A: escolhe" },
+            { 20000, 20800, B_PLUS, "+" }, { 20300, 20500, B_ZL, "ZL (com +): seletor esquerdo" },
+            { 24000, 24200, B_RIGHT, "direita" }, { 26000, 26200, B_A, "A: escolhe" },
+            { 30000, 30800, B_PLUS, "+" }, { 30300, 30500, B_ZR, "ZR (com +): seletor direito" },
+            { 34000, 34200, B_B, "B: fecha sem escolher" },
+        };
+        static int said[12], stick_said;
+        DWORD now = GetTickCount(), t;
+        unsigned i;
+        if (!t_in) t_in = now;
+        t = now - t_in;
+        for (i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+            int on = t >= seq[i].t0 && t < seq[i].t1;
+            if (on && !said[i]) { said[i] = 1; lg("[SkillTest] botao %s", seq[i].what); }
+            if (on) g_pad.down[seq[i].b] = 1;
+        }
+        if (t >= 32000 && t < 33000) {   /* analogico esquerdo com o seletor aberto: move o cursor, nao o heroi */
+            if (!stick_said) { stick_said = 1; lg("[SkillTest] analogico esquerdo para cima"); }
+            g_pad.ly = -0.8f;
+        }
+        g_pad.connected = 1;
+        if (now - last >= 500 && t < 40000) {
+            int mx = -1, my = -1;
+            last = now;
+            game_mouse(&mx, &my);
+            lg("[SkillTest] t=%.1fs seletor %d modo %d mouse %d,%d cursor %s pos %.1f,%.1f res %dx%d esquerda %d direita %d",
+               t / 1000.0f, ui_open(UI_MINISKILL), mode, mx, my, g_cursor_hidden ? "oculto" : "visivel", g_px, g_py,
+               g_resx, g_resy, hand_skill(0), hand_skill(1));
+        }
+    }
+
     /* Atalho do Menu de Gameplay: ZL + Minus, Minus + Plus, ZL + Plus, ou F10 */
     int menu_toggle = 0;
     if ((g_pad.down[B_ZL] && PRESSED(B_MINUS)) ||
@@ -3590,7 +3673,8 @@ static void tick(float dt)
         if (PRESSED(b)) {
             Act a;
             if (mode == M_GAME && b == B_PLUS) { g_plus_used = 0; continue; }
-            if (mode == M_GAME && b == B_ZL && binding(C_GAME, B_ZL).kind == A_LAYER) continue;
+            /* ZL e camada; com + segurado ele e um botao do [Jogo.Mais] (ZL = seletor da esquerda) */
+            if (mode == M_GAME && b == B_ZL && !g_pad.down[B_PLUS] && binding(C_GAME, B_ZL).kind == A_LAYER) continue;
             a = binding(ctx, b);
             if (ctx == C_PLUS) g_plus_used = 1;
             if (a.kind == A_LAYER || a.kind == A_PLUS) continue;

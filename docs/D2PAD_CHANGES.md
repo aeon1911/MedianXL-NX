@@ -212,3 +212,20 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
   quantos monstros estão a 25 subtiles. O critério "A troca de alvo" depende de algum monstro chegar até a entrada do
   campo; numa rodada que falhou, o mais perto ficou a 47 subtiles os 25 s inteiros (o A golpeou à frente, como deve).
   Nas rodadas com monstros por perto o A achou e trocou de alvo.
+
+### K. 27/10/2026 — seletor de habilidades (mão esquerda/direita) com cursor
+- **Problema**: com o cursor oculto fora de painéis, o seletor de habilidades do jogo (painel 0x03, aberto pelos botões
+  de habilidade do painel de controle) ficava sem cursor: o D2NXPad não o contava como painel, então o analógico
+  seguia andando com o herói, o A atacava e era impossível escolher uma habilidade. Além disso o `+ e ZR`/`+ e ZL`
+  clicava em ±117 px do centro, fora dos botões do Median XL, e o `+ e ZL` nunca chegava ao `[Jogo.Mais]` (o ZL era
+  sempre tratado como camada).
+- **Correção** (só `d2nxpad.c`; movimento, ações, cheats e demais painéis intactos): o painel 0x03 entra em
+  `any_panel_open` → modo painel só enquanto o seletor está aberto (cursor visível, analógico move o cursor, A clica,
+  B = ESC fecha); ao fechar volta ao modo partida (cursor oculto, movimento nativo). Botões medidos no Ryujinx em
+  1024x768: centros em (res/2 − 261, res_y − 30) e (res/2 + 307, res_y − 30), clique com apertar/soltar em quadros
+  diferentes. Ao abrir, o cursor vai ao 1º ícone do lado aberto (x 75 / res_x − 74, y res_y − 178) e o direcional
+  pula na grade de ícones (passo 50,5 px). Com `+` segurado o ZL deixa de ser camada e vira o seletor da esquerda.
+- **Teste**: `tools/run_skill_ryujinx.sh` (`SkillTest=1`, só botões do controle): 10/10 no Ryujinx 1.3.3 com firmware
+  22.5.0 — abre dos dois lados, cursor no 1º ícone, direcional, A troca a habilidade de cada mão (lida da unidade do
+  jogador), analógico move o cursor sem mover o herói, B fecha sem abrir o menu do jogo. Regressão:
+  `tools/run_acceptance_ryujinx.sh`.
