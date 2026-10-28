@@ -1259,7 +1259,16 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
             char obsolete_box64[MAX_PATH];
             snprintf(obsolete_box64, sizeof(obsolete_box64), "%sGame.box64.txt", g_root);
             if (file_exists(obsolete_box64)) {
-                if (DeleteFileA(obsolete_box64)) {
+                /* O Game.box64.txt do perfil de desempenho do projeto comeca com "# D2NX-DESEMPENHO" e e mantido
+                 * (o Autorun le as opcoes do Box64 antes deste codigo rodar, a cada boot). Qualquer outro e de
+                 * versoes antigas (STRONGMEM=3 / WEAKBARRIER=0 deixavam o dynarec muito lento): removido. */
+                char head[24] = "";
+                DWORD got = 0;
+                HANDLE hb = CreateFileA(obsolete_box64, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+                if (hb != INVALID_HANDLE_VALUE) { ReadFile(hb, head, sizeof(head) - 1, &got, NULL); CloseHandle(hb); }
+                if (!strncmp(head, "# D2NX-DESEMPENHO", 17)) {
+                    lg("Game.box64.txt do perfil de desempenho mantido");
+                } else if (DeleteFileA(obsolete_box64)) {
                     lg("Removido Game.box64.txt obsoleto para restaurar velocidade nativa");
                 }
             }

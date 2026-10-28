@@ -229,3 +229,39 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
   22.5.0 — abre dos dois lados, cursor no 1º ícone, direcional, A troca a habilidade de cada mão (lida da unidade do
   jogador), analógico move o cursor sem mover o herói, B fecha sem abrir o menu do jogo. Regressão:
   `tools/run_acceptance_ryujinx.sh`.
+
+### L. 27/10/2026 — fluidez (travamentos) no Switch
+- **Medição** (nova): `tools/medir_fluidez_ryujinx.sh <rótulo> [segundos]` entra no jogo (AutoJoin), anda (AutoWalk) e resume
+  o `[PROGRESS]`/`[THREADS]` do runtime do Autorun e a telemetria `[PERF]` do D2NXPad (`tools/resumir_fluidez.py`).
+  `[Geral] Perf=1` (padrão) grava no `d2nxpad.log` a cada 5 s: FPS, pior intervalo entre quadros (com nível e posição),
+  quantos quadros passaram de 33/50/100 ms, o custo do gancho e, para cada quadro > 50 ms, o instante e a duração
+  (`+1315:87` = 87 ms, 1,3 s depois do início da janela — mostra se os travamentos seguem um ritmo fixo). Custo: 2
+  `QueryPerformanceCounter` por quadro; a gravação fica na thread do D2NXPad, nunca na do jogo.
+- **O que o runtime mostrou** (Ryujinx 1.3.3, fw 22.5.0; o FPS do emulador NÃO é o do console):
+  a thread do jogo fica em 95-97% de um núcleo (limite de CPU, não de GPU); `glBufferSubData` consome ~22% do tempo
+  (4,5 chamadas por quadro, ~1,1 ms cada); o GL inteiro 7,5-10 ms por quadro. Nos primeiros ~20 s depois de entrar no
+  jogo há ~85-100 quadros > 33 ms (pior ~1,3 s, o carregamento) e depois só 0-2 por 5 s: o travamento "frequente" é
+  sobretudo o tradutor x86->ARM (Box64) traduzindo código na primeira execução e o D2GL subindo sprites novos
+  (`glTexSubImage3D`); cada habilidade, monstro ou área nova repete isso em escala menor. No console o custo é maior.
+- **Mudanças** (todas medidas, mesmo cenário, PTC do Ryujinx aquecido):
+  1. `Game.box64.txt` com `BOX64_DYNAREC_SAFEFLAGS=0` (o Autorun apagava qualquer `Game.box64.txt`; agora mantém o que
+     começa com `# D2NX-DESEMPENHO`): **54,9 FPS em regime contra 51,2** no padrão (3 rodadas contra 6) e 0,6-1,2 contra
+     1,2-1,9 quadros > 33 ms por 5 s. Testados sem efeito: `BIGBLOCK=3`+`FORWARD=512` (50,5), `WEAKBARRIER=2` (50,9). 
+     `ALIGNED_ATOMICS=1` derruba o jogo (aborto do Ryujinx) — não usar. Para voltar ao padrão: apagar o arquivo.
+  2. D2GL sem FXAA e sem nitidez (`d2nx.ini` → `d2gl.fxaa=false`, `d2gl.sharpen=false`; o `d2nx.ini` agora vai no pacote,
+     antes só existia na árvore de teste): chamadas GL por quadro 92 → 82, tempo no GL 5,3 → 4,8 ms/quadro,
+     `glBufferSubData` 4,5 → 2,5 chamadas/quadro. No console isso ainda tira dois passes de tela cheia da GPU (não medível
+     no Ryujinx). Voltar ao visual antigo: `d2gl.fxaa=true` / `d2gl.sharpen=true`.
+  3. D2NXPad: `IsWindow` 1x/s, `GetForegroundWindow` 4x/s, mapeamento da janela 1x/s (ou ao mudar a resolução), unidades
+     em volta 25x/s e laço a 60 Hz na partida (125 Hz com cursor/menus/cheats): a thread do D2NXPad caiu de ~4,4% para
+     ~2% de um núcleo (`[THREADS]`, thread `20w`).
+  4. `Debug=0` no `d2nxpad.ini` do pacote: com `Debug=1` ia uma linha de log a cada 2 s com `fflush` no cartão SD. Os
+     testes que leem mensagens `dbg()` (aceitação, menus, caminhada, itens) agora ligam `Debug=1` na árvore de teste.
+- **Sem efeito medido** (não adotado): `frame_latency` 3 e 5 do D2GL (o custo de `glBufferSubData` não mudou), `vsync` ligado/
+  desligado no D2GL e no runtime, `BIGBLOCK`/`FORWARD`/`WEAKBARRIER`, `motion_prediction`/`show_fps`/preset de shader.
+  O amostrador de CPU do runtime (`profile=1`) derruba o Ryujinx: só serve no console.
+- **Regressão** (binários finais, Ryujinx): aceitação 17/17, seletor de habilidades 10/10, menus 16/16, criação de
+  personagem 2/2, AutoWalk 102 posições distintas em 140 s. Atenção: a aceitação depende do PC estar sem carga (o herói
+  ainda termina a caminhada de chegada nos primeiros segundos; o critério da zona morta agora só conta 1,5 s depois).
+- **Para o próximo passo no console**: mandar `d2nxpad.log` (linhas `[PERF]`) e `logs/autorun_runtime.log`
+  (`[PROGRESS]`, `[THREADS]`); com `profile=1` no `Game.wine-nx.txt` o runtime também lista os módulos x86 mais quentes.

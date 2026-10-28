@@ -19,7 +19,8 @@ NOISE=${2:-0.0}
 if pgrep -f "^/tmp/ryujinx-d2" >/dev/null; then echo "ERRO: outro Ryujinx de teste ja esta rodando"; exit 1; fi
 python3 tools/assemble_sd_tree.py >/dev/null 2>&1 || { echo "ERRO: montagem do SD falhou"; exit 1; }
 mkdir -p "$OUT"
-sed -i '/^WalkTest=/d; /^RuidoAnalogico=/d; /^AutoCreate=/d; /^MenuTest=/d; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
+# Debug=1: os criterios leem mensagens dbg() (o INI do pacote vai com Debug=0)
+sed -i '/^WalkTest=/d; /^RuidoAnalogico=/d; /^AutoCreate=/d; /^MenuTest=/d; s/^Debug=.*/Debug=1/; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
 sed -i "s/^AutoJoin=1/AutoJoin=1\nWalkTest=${WT:-1}\nRuidoAnalogico=$NOISE/" "$INI"
 if [ -n "$MODE" ]; then
     sed -i '/^ModoOrdem=/d' "$INI"

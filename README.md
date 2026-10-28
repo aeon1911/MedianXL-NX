@@ -101,7 +101,8 @@ Os scripts `tools/run_*_ryujinx.sh` rodam o SD de teste em `build/ryujinx-test` 
 salva e recarrega), `run_item_test_ryujinx.sh` (usa o item de 1.500 de ouro do kit inicial e confere a leitura
 dos sons do MPQ), `run_menus_ryujinx.sh` (direcional no inventário, NPC, loja com Sim/Não e Organizar — 16 critérios),
 `run_walk_test_ryujinx.sh` (suavidade do movimento em 16 direções) e `run_skill_ryujinx.sh` (seletor de habilidades
-esquerda/direita com cursor — 10 critérios). `run_script_ryujinx.sh` roda qualquer roteiro
+esquerda/direita com cursor — 10 critérios). `medir_fluidez_ryujinx.sh` mede FPS, tempo no GL e carga por thread
+(`docs/D2PAD_CHANGES.md`, seção L). `run_script_ryujinx.sh` roda qualquer roteiro
 de botões (`tools/roteiros/`).
 
 ## ⚖️ Aviso legal

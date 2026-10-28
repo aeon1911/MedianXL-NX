@@ -18,7 +18,8 @@ python3 tools/assemble_sd_tree.py >/dev/null 2>&1 || { echo "ERRO: montagem do S
 rm -rf "$SHOTS"; mkdir -p "$SHOTS"
 
 run() {   # $1 = nome, $2 = linhas extras do [AutoTest], $3 = segundos no jogo
-    sed -i '/^AutoCreate=/d; /^MenuTest=/d; /^CursorTest=/d; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
+    # Debug=1: os criterios de A/X leem mensagens dbg() (o INI do pacote vai com Debug=0, sem gravar no SD a cada 2 s)
+    sed -i '/^AutoCreate=/d; /^MenuTest=/d; /^CursorTest=/d; s/^Debug=.*/Debug=1/; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
     sed -i "s/^AutoJoin=1/AutoJoin=1\n$2/" "$INI"
     echo "sdmc:/switch/wine/drive_c/DiabloII/Game.exe" > "$WINE/run-next.txt"
     rm -f "$ROOT/ryu.log" "$D2/D2Autorun.log" "$D2/d2nx/d2nxpad.log" "$WINE"/logs/*
@@ -66,7 +67,10 @@ def span(rs):
     return max((abs(a["x"] - b["x"]) + abs(a["y"] - b["y"])) for a in rs for b in rs) if rs else -1
 res = []
 def check(name, ok, info=""): res.append((name, ok, info))
-check("zona morta: analogico 0,12 nao move", 0 <= span(ph(1)) < 1.0, f"deslocamento {span(ph(1)):.1f}")
+# o heroi ainda termina a caminhada de chegada na cidade nos primeiros segundos (mais lenta com o PC carregado):
+# so conta depois de 1,5 s da fase, como o "soltar o analogico para" abaixo
+p1 = [r for r in ph(1) if r["t"] - ph(1)[0]["t"] >= 1.5] if ph(1) else []
+check("zona morta: analogico 0,12 nao move", 0 <= span(p1) < 1.0, f"deslocamento {span(p1):.1f}")
 check("inclinacao leve anda", span(ph(2)) > 8, f"deslocamento {span(ph(2)):.1f}")
 p3 = [r for r in ph(3) if r["t"] - ph(3)[0]["t"] >= 1.0] if ph(3) else []
 check("soltar o analogico para", 0 <= span(p3) < 1.0, f"deslocamento depois de 1 s solto {span(p3):.1f}")

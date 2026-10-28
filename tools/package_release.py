@@ -64,6 +64,8 @@ def validate_tree():
         os.path.join(d2_dir, "data/local/use"),
         os.path.join(d2_dir, "d2nx/D2NXPad.dll"),
         os.path.join(d2_dir, "d2nx/d2nxpad.ini"),
+        os.path.join(d2_dir, "d2nx/d2nx.ini"),
+        os.path.join(d2_dir, "Game.box64.txt"),
     ]
 
     for p in mandatory:

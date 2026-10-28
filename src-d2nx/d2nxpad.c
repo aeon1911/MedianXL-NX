@@ -126,6 +126,8 @@ static const char *default_ini =
 "; -1 = primeiro controle conectado\n"
 "Controle=-1\n"
 "Debug=0\n"
+"; 1 = registra a cada 5 s no d2nxpad.log: FPS, pior quadro e quantos passaram de 33/50/100 ms ([PERF])\n"
+"Perf=1\n"
 "\n"
 "[Movimento]\n"
 "; 1 = ordem estavel no centro das 64 direcoes do jogo (sem tremer nas diagonais); 0 = ordem antiga\n"
@@ -342,6 +344,7 @@ static DWORD ini_hex(const char *sec, const char *key, DWORD def)
 static void init_gameplay_menu_indices(void);
 
 static void script_load_ini(void);
+static int g_perf_ini = 1;
 static void load_config(void)
 {
     int c, b;
@@ -393,6 +396,7 @@ static void load_config(void)
     cfg.item_y = ini_int("AutoTest", "ItemY", 0);
     cfg.item_delay = ini_int("AutoTest", "ItemDelay", 10000);
     cfg.walktest = ini_int("AutoTest", "WalkTest", 0);
+    g_perf_ini = ini_int("Geral", "Perf", 1);
     script_load_ini();
     cfg.walk_noise = ini_float("AutoTest", "RuidoAnalogico", 0.0f);
     cfg.move_mode = ini_int("Movimento", "ModoOrdem", 1);
@@ -539,6 +543,7 @@ static int g_resx = 800, g_resy = 600;
 static float g_ox, g_oy, g_sx = 1, g_sy = 1;
 static DWORD g_player;
 static int g_cal_ok;
+static int g_cal_resx, g_cal_resy;      /* resolucao do ultimo mapeamento janela<->jogo */
 static int g_lbtn, g_rbtn;       /* botoes do mouse que NOS estamos segurando */
 static int g_key_down[256];
 static float g_curx = 400, g_cury = 300;   /* cursor que controlamos, em coordenadas do jogo */
@@ -2674,10 +2679,68 @@ static void game_frame(void)
     else if (player && sort_button_visible()) draw_sort_button();
 }
 
+/* Telemetria de quadros ([Geral] Perf=1, ligada por padrao): quadros por segundo vistos pelo gancho por quadro,
+ * pior intervalo entre quadros (com nivel e posicao) e quantos passaram de 33/50/100 ms, mais o custo do gancho.
+ * Custo: 2 QueryPerformanceCounter por quadro. A escrita no log fica na thread do D2NXPad (perf_publish), para
+ * a thread do jogo nunca esperar uma gravacao no cartao SD. */
+#define PF_SPIKES 8
+typedef struct { volatile LONG seq; float fps, maxdt_ms, hook_ms_s, px, py; LONG s33, s50, s100; int lvl;
+                 int nsp; int sp_at[PF_SPIKES], sp_ms[PF_SPIKES]; } PerfPub;
+static PerfPub g_pf_pub;
+static void perf_frame(LONGLONG t0, LONGLONG t1)
+{
+    static LONGLONG freq, last, win0, maxdt, hook;
+    static LONG frames, s33, s50, s100;
+    static int mlvl, nsp, sp_at[PF_SPIKES], sp_ms[PF_SPIKES];
+    static float mpx, mpy;
+    if (!freq) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); freq = f.QuadPart; }
+    hook += t1 - t0;
+    if (last) {
+        LONGLONG dt = t0 - last;
+        if (dt > freq * 10) { win0 = 0; maxdt = 0; hook = 0; frames = s33 = s50 = s100 = 0; }   /* voltou de um menu/carregamento */
+        else {
+            if (dt > maxdt) { maxdt = dt; mlvl = g_level; mpx = g_px; mpy = g_py; }
+            if (dt * 1000 > freq * 33) s33++;
+            if (dt * 1000 > freq * 50) s50++;
+            if (dt * 1000 > freq * 100) s100++;
+            /* instante (ms desde o inicio da janela) e duracao dos quadros acima de 50 ms: mostra se os travamentos se repetem num ritmo fixo */
+            if (dt * 1000 > freq * 50 && nsp < PF_SPIKES) { sp_at[nsp] = (int)((t0 - win0) * 1000 / freq); sp_ms[nsp] = (int)(dt * 1000 / freq); nsp++; }
+        }
+    }
+    last = t0;
+    frames++;
+    if (!win0) win0 = t0;
+    if (t0 - win0 >= freq * 5) {
+        float secs = (float)(t0 - win0) / (float)freq;
+        g_pf_pub.fps = frames / secs; g_pf_pub.maxdt_ms = maxdt * 1000.0f / freq; g_pf_pub.hook_ms_s = hook * 1000.0f / freq / secs;
+        g_pf_pub.s33 = s33; g_pf_pub.s50 = s50; g_pf_pub.s100 = s100; g_pf_pub.lvl = mlvl; g_pf_pub.px = mpx; g_pf_pub.py = mpy;
+        g_pf_pub.nsp = nsp; memcpy(g_pf_pub.sp_at, sp_at, sizeof(sp_at)); memcpy(g_pf_pub.sp_ms, sp_ms, sizeof(sp_ms));
+        InterlockedIncrement(&g_pf_pub.seq);
+        win0 = t0; maxdt = 0; hook = 0; frames = s33 = s50 = s100 = 0; nsp = 0;
+    }
+}
+static void perf_publish(void)
+{
+    static LONG seen;
+    PerfPub p;
+    if (g_pf_pub.seq == seen) return;
+    p = g_pf_pub; seen = p.seq;
+    {
+        char sp[160] = "";
+        int i, o = 0;
+        for (i = 0; i < p.nsp && o < (int)sizeof(sp) - 20; i++) o += snprintf(sp + o, sizeof(sp) - o, " +%d:%d", p.sp_at[i], p.sp_ms[i]);
+        lg("[PERF] fps %.1f | pior quadro %.0f ms (nivel %d, %.0f,%.0f) | >33ms %ld >50ms %ld >100ms %ld | gancho %.2f ms/s%s%s",
+           p.fps, p.maxdt_ms, p.lvl, p.px, p.py, (long)p.s33, (long)p.s50, (long)p.s100, p.hook_ms_s, p.nsp ? " | picos>50ms (ms:dur)" : "", sp);
+    }
+}
+
 static void __cdecl frame_hook(void)
 {
     static int logged;
+    LARGE_INTEGER q0, q1;
+    if (g_perf_ini) QueryPerformanceCounter(&q0);
     game_frame();
+    if (g_perf_ini) { QueryPerformanceCounter(&q1); perf_frame(q0.QuadPart, q1.QuadPart); }
     if (!g_cursor_hide_now) {
         if (!logged) { logged = 1; lg("gancho: chamando o desenho original do cursor (tipo %ld)", (long)rd32(g_client + 0x11B854)); }
         ((void (*)(void))g_cursor_tramp)();
@@ -3221,7 +3284,14 @@ static void tick(float dt)
 {
     int b, ctx, mode, editing;
     HWND fg;
-    if (!g_hwnd || !IsWindow(g_hwnd)) {
+    /* Chamadas de janela (servidor do Wine) espacadas: IsWindow 1x/s, GetForegroundWindow 4x/s, mapeamento da
+     * janela 1x/s (ou quando a resolucao muda) e unidades em volta 25x/s. Antes cada uma rodava a cada volta do
+     * laco (125x/s): 60-118 ms/s de CPU na thread do D2NXPad (medido no Ryujinx). */
+    static DWORD win_chk, fg_chk, cal_chk, scan_t;
+    static HWND fg_cache;
+    DWORD tnow = GetTickCount();
+    perf_publish();
+    if (!g_hwnd || (tnow - win_chk >= 1000 && (win_chk = tnow, !IsWindow(g_hwnd)))) {
         g_hwnd = find_game_window();
         g_cal_ok = 0;
         if (!g_hwnd) return;
@@ -3243,7 +3313,8 @@ static void tick(float dt)
             chat = c;
         }
     }
-    fg = GetForegroundWindow();
+    if (tnow - fg_chk >= 250) { fg_chk = tnow; fg_cache = GetForegroundWindow(); }
+    fg = fg_cache;
     if (fg && !cfg.autojoin && !cfg.autowalk && !cfg.autocreate && !cfg.itemtest && !cfg.readtest && !cfg.walktest && !g_scr.on) {
         DWORD pid = 0;
         GetWindowThreadProcessId(fg, &pid);
@@ -3264,7 +3335,10 @@ static void tick(float dt)
     if (g_nregions && GetTickCount() - g_regions_tick > 2000) { g_nregions = 0; g_regions_tick = GetTickCount(); }
     g_player = player_unit();
     read_resolution();
-    calibrate_tick();
+    if (!g_cal_ok || tnow - cal_chk >= 1000 || g_resx != g_cal_resx || g_resy != g_cal_resy) {
+        cal_chk = tnow; g_cal_resx = g_resx; g_cal_resy = g_resy;
+        calibrate_tick();
+    }
     if (!g_cal_ok) return;
 
     if (g_debug) {
@@ -3298,7 +3372,11 @@ static void tick(float dt)
             }
         }
     }
-    if (g_player) { scan_units(); compute_anchor(); if (g_debug > 2) ui_scan_tick(); }
+    if (g_player) {
+        if (tnow - scan_t >= 40 || tnow < scan_t) { scan_t = tnow; scan_units(); }
+        compute_anchor();
+        if (g_debug > 2) ui_scan_tick();
+    }
     if (g_player && g_debug > 2) {   /* despejo da estrutura do jogador para versoes novas */
         static DWORD last;
         if (GetTickCount() - last > 3000) {
@@ -3783,7 +3861,9 @@ static DWORD WINAPI worker(void *arg)
     QueryPerformanceCounter(&t0);
     while (g_running) {
         float dt;
-        Sleep(8);
+        /* 60x/s na partida (movimento e ataque seguem o relogio, nao as voltas do laco); 125x/s com cursor
+         * (menus e paineis) ou menu de cheats aberto */
+        Sleep(g_mode == M_GAME && !g_gp_menu.open ? 16 : 8);
         QueryPerformanceCounter(&t1);
         dt = (float)(t1.QuadPart - t0.QuadPart) / f.QuadPart;
         t0 = t1;

@@ -1,0 +1,7 @@
+# D2NX-DESEMPENHO - perfil do projeto (mantenha esta primeira linha: e por ela que o Autorun nao apaga o arquivo)
+# SAFEFLAGS=0: o tradutor x86->ARM deixa de salvar as flags a cada CALL/RET. Medido no Ryujinx (mesmo cenario, 80 s
+# de jogo): 54,9 quadros/s em regime contra 51,2 no padrao, e menos quadros acima de 33 ms. BIGBLOCK, FORWARD e
+# WEAKBARRIER foram testados e nao mudaram nada: ficam no padrao. (STRONGMEM=3 / WEAKBARRIER=0, de versoes antigas,
+# deixavam o jogo muito lento.)
+# Para voltar ao padrao do Box64: apague este arquivo ou troque o valor para 1 (tambem pelo menu Box64 do Autorun).
+BOX64_DYNAREC_SAFEFLAGS=0

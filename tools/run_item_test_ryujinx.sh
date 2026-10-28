@@ -24,7 +24,8 @@ python3 tools/assemble_sd_tree.py >/dev/null 2>&1 || { echo "ERRO: montagem do S
 rm -rf "$SHOTS"; mkdir -p "$SHOTS"
 [ -d "$MXL" ] && mv "$MXL" "$PARK"
 mkdir -p "$MXL"; cp -a "$SAVES/." "$MXL/"
-sed -i '/^ItemTest=/d; /^ItemX=/d; /^ItemY=/d; /^ItemDelay=/d; /^ReadTest=/d; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
+# Debug=1: os criterios leem mensagens dbg() (o INI do pacote vai com Debug=0)
+sed -i '/^ItemTest=/d; /^ItemX=/d; /^ItemY=/d; /^ItemDelay=/d; /^ReadTest=/d; s/^Debug=.*/Debug=1/; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
 sed -i "s/^AutoJoin=1/AutoJoin=1\nReadTest=1\nItemTest=2\nItemX=${ITEMX:-856}\nItemY=${ITEMY:-496}\nItemDelay=${DELAY:-30000}/" "$INI"
 echo "sdmc:/switch/wine/drive_c/DiabloII/Game.exe" > "$WINE/run-next.txt"
 rm -f "$ROOT/ryu.log" "$D2/D2Autorun.log" "$D2/d2nx/d2nxpad.log" "$WINE"/logs/*

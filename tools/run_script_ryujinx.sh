@@ -26,7 +26,8 @@ if [ -n "$SAVES" ]; then
     mkdir -p "$MXL"; cp -a "$SAVES/." "$MXL/"
 fi
 cp "$SCRIPT" "$D2/d2nx/roteiro.txt"
-sed -i '/^Script=/d; /^AutoCreate=/d; /^MenuTest=/d; /^WalkTest=/d; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
+# Debug=1: os criterios leem mensagens dbg() (o INI do pacote vai com Debug=0)
+sed -i '/^Script=/d; /^AutoCreate=/d; /^MenuTest=/d; /^WalkTest=/d; s/^Debug=.*/Debug=1/; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
 sed -i "s/^AutoJoin=1/AutoJoin=1\nScript=roteiro.txt/" "$INI"
 echo "sdmc:/switch/wine/drive_c/DiabloII/Game.exe" > "$WINE/run-next.txt"
 rm -f "$ROOT/ryu.log" "$D2/D2Autorun.log" "$D2/d2nx/d2nxpad.log" "$WINE"/logs/*

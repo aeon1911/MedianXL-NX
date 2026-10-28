@@ -157,7 +157,13 @@ def deploy_game_files(target_d2):
 
     # 3. Copiar D2NXPad
     shutil.copy2(os.path.join(SRC_GAME, "d2nx/D2NXPad.dll"), os.path.join(target_d2, "d2nx/D2NXPad.dll"))
-    shutil.copy2(os.path.join(SRC_GAME, "d2nx/d2nxpad.ini"), os.path.join(target_d2, "d2nx/d2nxpad.ini"))
+    # d2nxpad.ini tambem vem do repositorio (fonte unica; build/test_game/d2nx/d2nxpad.ini ficava defasado)
+    shutil.copy2(os.path.join(BASE_DIR, "sd-card/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini"),
+                 os.path.join(target_d2, "d2nx/d2nxpad.ini"))
+    # d2nx.ini (perfil de video do D2GL no Switch, lido pelo D2Autorun a cada boot): vem sempre do repositorio, para
+    # a arvore de teste nunca ficar com sobras de medicoes e o pacote levar o perfil de desempenho.
+    shutil.copy2(os.path.join(BASE_DIR, "sd-card/switch/wine/drive_c/DiabloII/d2nx/d2nx.ini"),
+                 os.path.join(target_d2, "d2nx/d2nx.ini"))
     src_tmpl = os.path.join(SRC_GAME, "d2nx/templates")
     dst_tmpl = os.path.join(target_d2, "d2nx/templates")
     if os.path.exists(src_tmpl):
@@ -173,14 +179,13 @@ def deploy_game_files(target_d2):
         f.write("-3dfx -direct -log\n")
     log("  Criado Game.args.txt (-3dfx -direct -log)")
 
-    # Remover Game.box64.txt customizado: STRONGMEM=3 e WEAKBARRIER=0 inserem barreiras de memoria
-    # pesadas em quase todas as instrucoes no ARM64 do Switch, degradando o I/O e a taxa de quadros
-    # (causando travamento de 5 minutos no boot da GPU/Storm.dll). O Box64 do Wine-NX ja possui
-    # configuracao padrao otimizada para o Tegra X1.
+    # Game.box64.txt: perfil de desempenho do projeto (so BOX64_DYNAREC_SAFEFLAGS=0, medido: +7% de quadros por segundo).
+    # Versoes antigas tinham STRONGMEM=3 e WEAKBARRIER=0 (barreiras de memoria pesadas em quase toda instrucao: boot de
+    # minutos e menos quadros); o arquivo atual vem do repositorio e comeca com "# D2NX-DESEMPENHO", marca que o
+    # D2Autorun reconhece para nao apaga-lo (qualquer outro Game.box64.txt ele remove no boot).
     box64_path = os.path.join(target_d2, "Game.box64.txt")
-    if os.path.exists(box64_path):
-        os.remove(box64_path)
-        log("  Removido Game.box64.txt obsoleto")
+    shutil.copy2(os.path.join(BASE_DIR, "sd-card/switch/wine/drive_c/DiabloII/Game.box64.txt"), box64_path)
+    log("  Game.box64.txt do perfil de desempenho copiado")
 
     wine_nx_path = os.path.join(target_d2, "Game.wine-nx.txt")
     with open(wine_nx_path, "w", encoding="utf-8") as f:
