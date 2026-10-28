@@ -1,0 +1,2 @@
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686 make python3 && rm -rf /var/lib/apt/lists/*

@@ -30,7 +30,11 @@ Repositório remoto: https://github.com/aeon1911/MedianXL-NX (branch `main`). Fa
   DLLs do jogo, MPQs, tabelas `.bin`, saves. `sd-card/` so tem runtime AUTORUN (LGPL) e configuracoes.
 - `medianxl-data.mpq` = os 56 `medianxl-*.mpq` juntos por COPIA DE BLOCOS (`tools/merge_mpqs.cpp`). Nunca
   recomprimir: a Storm 1.13c nao le zlib (os sons viravam zlib → "The file data is corrupt" no item de ouro).
-- Compilar DLLs: `docker run --rm -v "$PWD":/w -w /w/src-d2nx d2-autorun-pe-builder:latest sh build.sh`
+- Compilar DLLs (imagem em `tools/docker/Dockerfile.pe-builder`, criar com
+  `podman build -t d2-autorun-pe-builder:latest -f tools/docker/Dockerfile.pe-builder tools/docker`):
+  `podman run --rm --security-opt label=disable -v "$PWD":/w -w /w/src-d2nx d2-autorun-pe-builder:latest sh build.sh`
+  (nao usar `:Z`: tenta reetiquetar a arvore inteira e falha). Ryujinx: flatpak `--user` `io.github.ryubing.Ryujinx`.
+- **Retomando o projeto: leia `docs/HANDOFF.md`** (estado, problema aberto de stutter, como reconstruir o ambiente).
 - Montar SD: `python3 tools/assemble_sd_tree.py` (gera `dist/sd-card/` e `build/ryujinx-test/sdcard/`)
 - Teste Ryujinx: `./tools/run_fase3_ryujinx_test.sh` (liga AutoJoin/AutoWalk no ini de teste; janela de 180 s;
   logs em `build/ryujinx-test/sdcard/switch/wine/{logs/autorun_runtime.log, drive_c/DiabloII/D2Autorun.log, drive_c/DiabloII/d2nx/d2nxpad.log}`)
