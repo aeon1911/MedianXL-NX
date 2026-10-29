@@ -86,6 +86,18 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
 - Roteiros de botões: `tools/run_script_ryujinx.sh <roteiro>` (comandos em script_tick); aceitação dos menus:
   `tools/run_menus_ryujinx.sh` (16 critérios). Nos ~8 s após entrar no jogo as teclas são ignoradas (Enter atrasado).
 
+## 28/10/2026 — log do console analisado: luz baixa dobra o FPS; medição no Ryujinx corrigida (detalhes: D2PAD_CHANGES M)
+- Stutter no console = custo contínuo por quadro, principalmente a **qualidade de luz alta** do jogo (cada monstro/magia/tocha pesa).
+  O D2Autorun grava `legacy_light_quality=0` no `preferences.json` do Median XL a cada boot (`d2nx.ini` `[Desempenho] QualidadeLuz`;
+  `2` volta ao visual antigo). Ryujinx, sem limite de FPS: 17-21 ms → 7-11 ms por quadro (cidade e campo). **Falta confirmar no console.**
+- Ryujinx de teste: áudio SDL3 em tempo real, volume 0 (o `Dummy` faz o mixer do DirectSound rodar a ~80% de um núcleo: artefato).
+  FPS acima de 60 só aparece com `d2gl.vsync=false` + `d2gl.foreground_fps=false` (`tools/medir_campo_ryujinx.sh`).
+- Ambiente no CachyOS: Docker pelo grupo (`sudo -u $USER -g docker docker ...`, `--user $(id -u):$(id -g)`), Ryujinx nativo
+  (`/usr/bin/ryujinx`), chaves copiadas de `build/backup-troca-distro/ryujinx-config/system/`, firmware por
+  `tools/instalar_firmware_ryujinx.py`. O `main` local antigo tem história reescrita; o trabalho vive em `origin/main`
+  (worktrees em `.claude/worktrees/`, com `build` e `dist` ligados por symlink à pasta principal).
+- Logs do console: `tools/coletar_logs_console.py <raiz do SD>` (o `d2nxpad.log` agora tem `[PERF]`, `[THR]`, `[MEM]`, `[RT]`).
+
 ## Testes
 - `tools/run_item_test_ryujinx.sh`: usa o personagem de `build/fresh-test-saves` (rodar antes o fresh test),
   `ReadTest=1` (CRC de `holy_ding.wav` pela Storm = 20ec3821) + `ItemTest=2` (clica no item de ouro em 856,496).

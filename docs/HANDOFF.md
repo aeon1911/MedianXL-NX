@@ -1,47 +1,53 @@
 # HANDOFF — retomar o projeto (troca de distro, 28/10/2026)
 
 Ponto de partida: `origin/main` (https://github.com/aeon1911/MedianXL-NX). Leia antes `CLAUDE.md`, `AGENTS.md`,
-`RULES.md` (regras permanentes) e `docs/D2PAD_CHANGES.md` (seções E a L = o que foi feito e medido).
+`RULES.md` (regras permanentes) e `docs/D2PAD_CHANGES.md` (seções E a M = o que foi feito e medido).
 `docs/STATUS.md`, `ARQUITETURA.md`, `CONTROLES.md`, `PROGRESSO.md` descrevem abordagens antigas: nao usar como verdade.
 
 ## Estado
-- Funciona no console (Switch Lite, portatil): boot, jogo, andar/atacar nativos, habilidades, seletor de habilidades
-  (+ e ZR/ZL), menus, criacao de personagem, teclado de nome (R3).
-- Regressao no Ryujinx (27/10, binarios finais): aceitacao 17/17, seletor 10/10, menus 16/16, criacao 2/2.
-- Pacote: `dist/d2-medianxl-autorun-switch-2.14.6-final.zip` (SHA256 865a82c0ce3e2a6b8f30080ceb6d32aeca0eab2f7348a341dbd0d2c368bf18e6).
-  Anteriores: `-final-seletor.zip`, `-final-24out.zip`. DLLs e zips NAO vao para o git (so as fontes).
+- Funciona no console (Switch Lite, portátil): boot, jogo, andar/atacar nativos, habilidades, seletor de habilidades
+  (+ e ZR/ZL), menus, criação de personagem, teclado de nome (R3).
+- Regressão no Ryujinx (28/10): aceitação 17/17 (na 1ª rodada 16/17: o critério "troca de alvo" depende de um monstro chegar a tempo;
+  passou na 2ª), seletor 10/10, menus 16/16, criação 2/2, com o D2NXPad 1.1.1+telemetria. O 1.1.2 do pacote só muda o número da versão e o
+  texto do INI padrão; nele foram repetidos o seletor (10/10) e a rodada de fluidez (60 FPS, `[THR]`/`[RT]` no log).
+- Pacote: `dist/d2-medianxl-autorun-switch-2.14.6-final.zip` (28/10, luz baixa + telemetria nova; SHA256
+  f1564cbdd9f9e0cca790b0ce37de17e14c352eb2f700a5c409a711c813ed4382). Anteriores: `-final-27out.zip` (o que gerou o log de 28/10),
+  `-final-seletor.zip`, `-final-24out.zip`. DLLs e zips NAO vao para o git (so as fontes).
 
-## PROBLEMA ABERTO: stutter no console
-Relato do usuario apos ~1 h no Lite: continua travado. Quedas fortes de FPS (a) com as magias azuis dos monstros ao
-redor das pedras do portal do Cain em Stony Field e (b) com muitos monstros na tela. A otimizacao de 27/10
-(SAFEFLAGS=0, D2GL sem FXAA/sharpen, D2NXPad leve, Debug=0) deu so ~7% no Ryujinx e nao foi perceptivel.
-- Causa NAO confirmada (regra: nada de chute). Hipoteses: GPU do Lite (fill-rate de efeitos transparentes) ou CPU
-  (chamadas GL / upload de sprites novos do D2GL; traducao Box64 de codigo novo).
-- **Falta o log do console.** Pedir ao usuario, logo apos jogar ~10 min incluindo Stony Field:
-  `switch/wine/drive_c/DiabloII/d2nx/d2nxpad.log` (linhas `[PERF]`: fps, pior quadro com nivel e posicao, picos) e
-  `switch/wine/logs/autorun_runtime.log` (`[PROGRESS]`, `[THREADS]`). Sao sobrescritos a cada partida.
-- Candidatos, em ordem: (1) reduzir a resolucao interna do D2GL (ex.: 720p -> 540p esticado) / efeitos do D2GL, se for GPU;
-  (2) mudar o envio de efeitos do D2GL, se for CPU; (3) recompilar o runtime com o cache de traducao ligado;
-  (4) pre-aquecer na carga. Medir antes/depois no Ryujinx (`tools/medir_fluidez_ryujinx.sh`) e validar no console.
-- Achados do runtime (fonte em `build/autorun-src/wine-nx-probe`): `box64env.dynacache = 0` fixo em
-  `source/wow64_box64_dynarec.c` e `BOX64_DYNACACHE` nao esta na lista de `source/box64_options.h` -> o cache de
-  traducao nao liga pelo `Game.box64.txt`. `BOX64_DYNAREC_ALIGNED_ATOMICS=1` derruba o jogo. Memoria de codigo
-  traduzido ficou em 16/32 MB sem purge (PURGE nao ajuda). BIGBLOCK/FORWARD/WEAKBARRIER/frame_latency/vsync: sem efeito medido.
-- Se o `Game.box64.txt` der problema: apagar o arquivo (volta ao padrao). D2GL: `d2gl.fxaa=true`/`d2gl.sharpen=true` no `d2nx.ini`.
+## Stutter no console: causa provável tratada em 28/10 (confirmar no console)
+Log do console recebido em 28/10 (24 min, Stony Field incluído) e analisado em `docs/D2PAD_CHANGES.md` seção M. Resumo: cidade a 60 FPS,
+campo 37-46, Stony Field 14-40; o custo é contínuo por quadro (mediana 61 ms nos quadros lentos), sem degraus de vsync.
+- **Mudança**: luz baixa por padrão (`[Desempenho] QualidadeLuz=0` no `d2nx.ini`; o D2Autorun grava `legacy_light_quality=0` no
+  `preferences.json` do Median XL a cada boot). No Ryujinx o custo do quadro cai de 17-21 ms para 7-11 ms (cidade e campo).
+  Cada fonte de luz pesa na luz alta, o que casa com as magias azuis do relato. Reverter: `QualidadeLuz=2`.
+- **Falta no console**: jogar ~10 min incluindo Stony Field e rodar `tools/coletar_logs_console.py <raiz do SD>` (ou mandar
+  `switch/wine/drive_c/DiabloII/d2nx/d2nxpad.log`, `D2Autorun.log` e `switch/wine/logs/autorun_runtime.log`). O `d2nxpad.log` agora
+  traz `[THR]`, `[MEM]` e `[RT]` (linhas do runtime: memória de código traduzido, heap), então basta ele.
+- **Ainda sem causa**: travadas de 0,6-5,6 s com o inventário aberto em Stony Field (16:48 do log). Se voltarem, ver `[MEM]`/`[RT]`
+  do mesmo trecho (`code_mb=N/N` = memória de código esgotada; `heap_free_mb` baixo = pouca memória).
+- **Se ainda faltar FPS em cenas pesadas**: sessão com `profile=1` no `Game.wine-nx.txt` (módulos x86 mais quentes; só no console).
+- **Medição no Ryujinx**: `tools/medir_fluidez_ryujinx.sh` agora fixa o áudio SDL3 (volume 0): com `Dummy` o mixer do DirectSound
+  fica a ~80% de um núcleo e distorce o `[THREADS]`. Para comparar custo de quadro sem o teto de 60 FPS: `tools/medir_campo_ryujinx.sh`.
+- Achados do runtime (fonte em `build/autorun-src/wine-nx-probe`): `box64env.dynacache = 0` fixo em `source/wow64_box64_dynarec.c` e
+  `BOX64_DYNACACHE` não está em `source/box64_options.h` -> o cache de tradução não liga pelo `Game.box64.txt`.
+  `BOX64_DYNAREC_ALIGNED_ATOMICS=1` derruba o jogo; `BIGBLOCK=0` é 25% mais lento, `BIGBLOCK=1` derrubou o Ryujinx uma vez em duas.
+- Se o `Game.box64.txt` der problema: apagar o arquivo (volta ao padrão). D2GL: `d2gl.fxaa=true`/`d2gl.sharpen=true` no `d2nx.ini`.
 
 ## Reconstruir o ambiente numa distro nova
 1. `git clone https://github.com/aeon1911/MedianXL-NX` (ou usar a pasta ja existente no disco STEAM).
 2. Ferramentas: podman (ou docker), python3, flatpak, ImageMagick (`import`) e xprop (capturas), gcc/g++ para
    `tools/build_tools.sh` (StormLib). Em Bazzite/Fedora Atomic o podman ja vem.
-3. Compilar as DLLs (imagem em `tools/docker/Dockerfile.pe-builder`):
+3. Compilar as DLLs (imagem em `tools/docker/Dockerfile.pe-builder`; no CachyOS/Docker, se o grupo `docker` ainda não valeu na sessão:
+   `sudo -u $USER -g docker docker ...`, e `--user $(id -u):$(id -g)` no `run` para os `.dll` não saírem de root):
    `podman build -t d2-autorun-pe-builder:latest -f tools/docker/Dockerfile.pe-builder tools/docker`
    `podman run --rm --security-opt label=disable -v "$PWD":/w -w /w/src-d2nx d2-autorun-pe-builder:latest sh build.sh`
    (sem `:Z`). Em 27/10 compilei com mingw i686 gcc 13 posix (extraido de .deb); a imagem usa o gcc do Debian bookworm.
    Depois de compilar, conferir que o `D2Autorun.dll` importa so ADVAPI32, KERNEL32, msvcrt, USER32 e rodar a aceitacao.
-4. Ryujinx 1.3.3: `flatpak install --user io.github.ryubing.Ryujinx`; `~/.local/bin/ryujinx` -> binario dentro do
-   flatpak (os scripts usam `which ryujinx`). Chaves/firmware do console do usuario (NAO versionados): `prod.keys`,
-   `title.keys` em `build/ryujinx-test/system/` e `build/ryujinx-test/bis` = symlink para
-   `~/.var/app/io.github.ryubing.Ryujinx/config/Ryujinx/bis` (recriar o symlink; o conteudo esta no backup).
+4. Ryujinx 1.3.3: no CachyOS é o pacote `ryujinx` (`/usr/bin/ryujinx`; os scripts usam `which ryujinx`); no Bazzite era o flatpak
+   `io.github.ryubing.Ryujinx` com `~/.local/bin/ryujinx` apontando para ele. Chaves/firmware do console do usuário (NÃO versionados):
+   copiar `prod.keys` e `title.keys` (backup em `build/backup-troca-distro/ryujinx-config/system/`) para `build/ryujinx-test/system/`
+   (cópia, não symlink) e instalar o firmware com `tools/instalar_firmware_ryujinx.py ~/Downloads/Firmware.22.5.0.zip`
+   (cria `build/ryujinx-test/bis/system/Contents/registered/`; o antigo symlink `build/ryujinx-test/bis` apontava para o flatpak).
 5. Arquivos do Diablo II / Median XL: nao estao no git. `./setup.sh "<pasta do Diablo II>"` refaz `build/test_game`;
    `build/gameplay_orig/` guarda as tabelas originais para `tools/patch_gameplay.py`.
 6. Montar e testar: `python3 tools/assemble_sd_tree.py`, `tools/run_acceptance_ryujinx.sh`,

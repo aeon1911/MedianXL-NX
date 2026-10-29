@@ -18,7 +18,7 @@
 #include <ctype.h>
 #include <wchar.h>
 
-#define PAD_VERSION "1.1.1"
+#define PAD_VERSION "1.1.2"
 
 /* ======================================================================================
  * utilidades
@@ -126,7 +126,8 @@ static const char *default_ini =
 "; -1 = primeiro controle conectado\n"
 "Controle=-1\n"
 "Debug=0\n"
-"; 1 = registra a cada 5 s no d2nxpad.log: FPS, pior quadro e quantos passaram de 33/50/100 ms ([PERF])\n"
+"; 1 = registra a cada 5 s no d2nxpad.log: FPS, pior quadro e quantos passaram de 33/50/100 ms ([PERF]) e, a cada 30 s,\n"
+"; memoria ([MEM]), threads ([THR]) e o resumo do log do runtime ([RT])\n"
 "Perf=1\n"
 "\n"
 "[Movimento]\n"
@@ -2719,12 +2720,116 @@ static void perf_frame(LONGLONG t0, LONGLONG t1)
         win0 = t0; maxdt = 0; hook = 0; frames = s33 = s50 = s100 = 0; nsp = 0;
     }
 }
+/* Telemetria para quem le o log do console, sem precisar do profile=1:
+ *  - [THR]: cada thread do processo com o modulo e o RVA do ponto de entrada. O [THREADS] do runtime do Autorun so da
+ *    numeros (tid); aqui eles ganham nome (Fog, Storm, glide3x = D2GL, DSOUND = mixer do DirectSound, D2sound...).
+ *    CreateToolhelp32Snapshot falha no Wine-NX (erro 1) e, nos testes, GetThreadTimes nao deu tempos de CPU (o uso por thread
+ *    esta no [THREADS] do runtime): os ids de thread do Wine sao multiplos de 4, entao cada um e aberto com OpenThread.
+ *  - [MEM]: memoria fisica e enderecos livres do processo.
+ *  - [RT]: ultimas linhas [PROGRESS] (memoria de codigo traduzido, heap, GL, audio), [THREADS] e [DYNAREC] que o runtime gravou
+ *    em sdmc:/switch/wine/logs/autorun_runtime.log, lidas pelo Z:\ do Wine: um unico arquivo (este) leva tudo.
+ * Roda na thread do D2NXPad, a cada 30 s de partida; nunca na thread do jogo. */
+typedef LONG (WINAPI *NtQueryInformationThread_t)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+static void log_threads(void)
+{
+    NtQueryInformationThread_t nt_query = (NtQueryInformationThread_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread");
+    char buf[640];
+    DWORD tid;
+    int o = 0, n = 0;
+    for (tid = 4; tid <= 512 && o < (int)sizeof(buf) - 90; tid += 4) {
+        HANDLE h = OpenThread(THREAD_QUERY_INFORMATION, FALSE, tid);
+        PVOID start = NULL;
+        char mod[MAX_PATH] = "?", *b;
+        HMODULE hm = NULL;
+        if (!h) continue;
+        if (nt_query) nt_query(h, 9 /* ThreadQuerySetWin32StartAddress */, &start, sizeof(start), NULL);
+        CloseHandle(h);
+        n++;
+        if (start && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)start, &hm) && hm) {
+            GetModuleFileNameA(hm, mod, sizeof(mod));
+            if ((b = strrchr(mod, '\\'))) memmove(mod, b + 1, strlen(b));
+            o += snprintf(buf + o, sizeof(buf) - o, " | %lu %s+%lX", tid, mod, (DWORD)(UINT_PTR)start - (DWORD)(UINT_PTR)hm);
+        } else
+            o += snprintf(buf + o, sizeof(buf) - o, " | %lu %s", tid, start ? "?" : "principal");
+    }
+    lg("[THR] %d threads%s", n, buf);
+}
+static void log_memory(void)
+{
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms))
+        lg("[MEM] fisica livre %lu de %lu MB | enderecos livres %lu MB", (unsigned long)(ms.ullAvailPhys >> 20),
+           (unsigned long)(ms.ullTotalPhys >> 20), (unsigned long)(ms.ullAvailVirtual >> 20));
+}
+static void log_runtime_tail(void)
+{
+    static int failed;
+    static const char *const keys[] = { "[PROGRESS] ", "[THREADS] ", "[DYNAREC] " };
+    static const char *const fields[] = { "code_mb=", "code_all_mb=", "heap_used_mb=", "heap_free_mb=", "purged=", "frames=", "gl_frames=",
+                                          "gl_ms=", "swap_ms=", "audio_under=", "invalidations=", "translator_locks=" };
+    char path[] = "Z:\\switch\\wine\\logs\\autorun_runtime.log";
+    HANDLE h;
+    DWORD size, got = 0, i;
+    char *b, *p;
+    int k;
+    if (failed) return;
+    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) { failed = 1; lg("[RT] %s inacessivel (erro %lu): mande tambem switch/wine/logs/autorun_runtime.log", path, GetLastError()); return; }
+    size = GetFileSize(h, NULL);
+    if (size == INVALID_FILE_SIZE) { CloseHandle(h); return; }
+    if (size > 98304) SetFilePointer(h, (LONG)(size - 98304), NULL, FILE_BEGIN);
+    b = (char *)malloc(98305);
+    if (!b) { CloseHandle(h); return; }
+    if (!ReadFile(h, b, 98304, &got, NULL)) got = 0;
+    CloseHandle(h);
+    b[got] = 0;
+    for (k = 0; k < 3; k++) {                                       /* a ultima ocorrencia de cada tipo de linha */
+        char *last = NULL, line[420];
+        for (p = b; (p = strstr(p, keys[k])) != NULL; p++) if (p == b || p[-1] == '\n') last = p;
+        if (!last) continue;
+        if (k == 0) {                                               /* [PROGRESS] e longa: so os campos que interessam */
+            int o = 0;
+            char *e = strchr(last, '\n');
+            if (e) *e = 0;
+            {                                                       /* "[PROGRESS] 95s": o rotulo e o tempo de execucao do runtime */
+                int len = 0;
+                while (last[len] && last[len] != ' ') len++;
+                len++;
+                while (last[len] && last[len] != ' ') len++;
+                o += snprintf(line, sizeof(line), "%.*s", len, last);
+            }
+            for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+                char *f = strstr(last, fields[i]);
+                int len = 0;
+                if (!f) continue;
+                while (f[len] && f[len] != ' ') len++;
+                o += snprintf(line + o, sizeof(line) - o, " %.*s", len, f);
+            }
+        } else {
+            char *e = strchr(last, '\n');
+            if (e) *e = 0;
+            snprintf(line, sizeof(line), "%s", last);
+        }
+        lg("[RT] %s", line);
+    }
+    free(b);
+}
+
 static void perf_publish(void)
 {
     static LONG seen;
+    static int windows;
     PerfPub p;
     if (g_pf_pub.seq == seen) return;
     p = g_pf_pub; seen = p.seq;
+    /* a cada 30 s de partida (6 janelas de 5 s); o mapa das threads so na 1a vez e na 3a janela */
+    if (g_perf_ini && (windows == 2 || (windows % 6) == 5)) {
+        if (windows == 2) log_threads();
+        log_memory();
+        log_runtime_tail();
+    }
+    windows++;
     {
         char sp[160] = "";
         int i, o = 0;

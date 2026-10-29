@@ -881,6 +881,77 @@ static void ensure_save_dir(void)
     else if (GetLastError() != ERROR_ALREADY_EXISTS) lg("pasta de saves %s: erro %lu", dir, GetLastError());
 }
 
+/* Opcoes de video do jogo: o Median XL guarda em %APPDATA%\MedianXL\save\preferences.json as opcoes do menu de video do
+ * Diablo II (legacy_light_quality: 0 baixa, 1 normal, 2 alta; legacy_blended_shadows: 0/1) e as le ao iniciar.
+ * Medido no Ryujinx (28/10/2026, cidade, sem limite de FPS, 2 rodadas por variante): luz alta ou normal = 17,5-18,0 ms por
+ * quadro, luz baixa = 8,6 ms (o dobro de FPS); as sombras translucidas nao mudaram o custo de CPU. [Desempenho] QualidadeLuz
+ * (padrao 0 = baixa) e SombrasTranslucidas (padrao -1 = como o jogador deixou) sao aplicados a cada boot; -1 nao mexe.
+ * Se o arquivo ainda nao existe (1a vez), o Median XL o cria com o padrao e o ajuste vale a partir do boot seguinte. */
+static int json_set_int(char *b, size_t *len, size_t cap, const char *key, int value)
+{
+    char pat[64], num[16];
+    char *p, *q;
+    size_t n, m;
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    if (!(p = strstr(b, pat))) return 0;
+    p += strlen(pat);
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p++ != ':') return 0;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    q = p;
+    if (*q == '-') q++;
+    while (*q >= '0' && *q <= '9') q++;
+    if (q == p) return 0;                                    /* nao e um inteiro */
+    n = (size_t)(q - p);
+    snprintf(num, sizeof(num), "%d", value);
+    m = strlen(num);
+    if (n == m && !memcmp(p, num, n)) return 0;              /* ja esta assim */
+    if (*len - n + m + 1 > cap) return 0;
+    memmove(p + m, q, *len - (size_t)(q - b) + 1);
+    memcpy(p, num, m);
+    *len = *len - n + m;
+    return 1;
+}
+static void apply_game_prefs(void)
+{
+    static const struct { const char *ini; int def; const char *key; } opts[] = {
+        { "QualidadeLuz", 0, "legacy_light_quality" },
+        { "SombrasTranslucidas", -1, "legacy_blended_shadows" },
+    };
+    char path[MAX_PATH], tmp[MAX_PATH], *b;
+    HANDLE h;
+    DWORD size, got = 0, put = 0;
+    size_t len;
+    unsigned i;
+    int changed = 0;
+    if (!GetEnvironmentVariableA("APPDATA", path, sizeof(path) - 40)) return;
+    lstrcatA(path, "\\MedianXL\\save\\preferences.json");
+    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) { lg("preferences.json ainda nao existe: opcoes de video no padrao do jogo neste boot"); return; }
+    size = GetFileSize(h, NULL);
+    if (size == INVALID_FILE_SIZE || size > (1u << 20) || !(b = malloc((size_t)size + 64))) { CloseHandle(h); return; }
+    if (!ReadFile(h, b, size, &got, NULL) || got != size) { CloseHandle(h); free(b); return; }
+    CloseHandle(h);
+    b[size] = 0;
+    len = size;
+    for (i = 0; i < sizeof(opts) / sizeof(opts[0]); i++) {
+        int want = cfg_int("Desempenho", opts[i].ini, opts[i].def);
+        if (want < 0 || want > 9) continue;
+        if (json_set_int(b, &len, (size_t)size + 64, opts[i].key, want)) { changed++; lg("preferences.json: %s = %d (perfil de desempenho)", opts[i].key, want); }
+    }
+    if (changed) {                                           /* grava num temporario e troca: uma queda no meio nao deixa o JSON pela metade */
+        snprintf(tmp, sizeof(tmp), "%s.d2nx", path);
+        h = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            int ok = WriteFile(h, b, (DWORD)len, &put, NULL) && put == (DWORD)len;
+            CloseHandle(h);
+            if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING)) { lg("preferences.json: nao consegui gravar o ajuste (erro %lu)", GetLastError()); DeleteFileA(tmp); }
+        }
+    } else
+        lg("preferences.json: opcoes de video ja no perfil de desempenho");
+    free(b);
+}
+
 /* Versoes anteriores do D2NXPad gravavam data\global\excel\charstats.bin com "gld " no kit inicial
  * (ouro inicial). O Median XL recusa o personagem criado assim ("Generic bad character file").
  * Remove essa copia antes de o jogo carregar as tabelas, para valer a original do MPQ. */
@@ -1318,6 +1389,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
         if (g_is_mxl) {
             log_vm_layout("boot");
             ensure_save_dir();
+            apply_game_prefs();
             remove_bad_charstats();
         }
         if (g_is_d2se || g_is_mxl) video_setup();

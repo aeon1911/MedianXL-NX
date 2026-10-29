@@ -265,3 +265,66 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
   ainda termina a caminhada de chegada nos primeiros segundos; o critério da zona morta agora só conta 1,5 s depois).
 - **Para o próximo passo no console**: mandar `d2nxpad.log` (linhas `[PERF]`) e `logs/autorun_runtime.log`
   (`[PROGRESS]`, `[THREADS]`); com `profile=1` no `Game.wine-nx.txt` o runtime também lista os módulos x86 mais quentes.
+
+### M. 28/10/2026 — log do console analisado; luz baixa dobra o FPS; medição corrigida
+- **O que o log do console mostrou** (`d2nxpad.log` de 24 min: personagem novo, Rogue Encampment → Blood Moor → Den of Evil →
+  Cold Plains → Stony Field; analisado com `tools/analisar_perf_log.py`):
+  - Cidade parada: 60,0 FPS. Fora da cidade: Blood Moor 45 FPS (média), Den 46, Cold Plains 37, **Stony Field 37 (p10 = 22, mínimo
+    14)**. Os piores trechos são cenas com muitas magias/monstros (relato do usuário: magias azuis ao redor das pedras do portal).
+  - 815 quadros acima de 50 ms em 24 min, mediana 61 ms (527 entre 50 e 70 ms): o problema é custo alto e contínuo por quadro, não
+    só travadas. Há 18 quadros acima de 500 ms (30,9 s no total): 8 isolados (0,5 a 1,8 s, em carga de nível e
+    primeira execução de algo) e **10 em ~60 s com o inventário aberto em Stony Field** (16:48:03-16:49:05, o herói parado; 0,6 a
+    5,6 s cada) — **causa não confirmada**.
+  - Sem degraus de vsync: nas 24 janelas sem quadro > 33 ms o tempo médio por quadro varia de forma contínua (16,6-23,8 ms), então o
+    FPS baixo é custo de CPU/GPU, não travamento do swap em 16,7/33,3 ms.
+  - O gancho do D2NXPad custa tipicamente 0,5-3 ms por segundo (≤ 0,3%): o controle não é o gargalo. Boot: janela do jogo em 27 s, primeiro
+    quadro de partida em 46 s (inclui o menu).
+- **Causa encontrada e medida: qualidade de luz alta do jogo.** O Median XL guarda as opções de vídeo do Diablo II em
+  `%APPDATA%\MedianXL\save\preferences.json` (`legacy_light_quality` 0/1/2, `legacy_blended_shadows` 0/1) e o pacote deixava o
+  padrão (luz alta). Medido no Ryujinx (fw 22.5.0, sem limite de FPS: `d2gl.vsync=false` e `d2gl.foreground_fps=false`; duas rodadas
+  por variante, resultados repetidos ao 0,1 FPS):
+
+  | cena (ms por quadro) | luz alta (2) | luz normal (1) | luz baixa (0) |
+  |---|---|---|---|
+  | cidade, `medir_fluidez` | 17,4 / 17,7 | 18,0 | **8,6 / 8,6** |
+  | cidade, cenário da aceitação | 20,7 / 21,2 | | **10,8 / 10,1** |
+  | campo (Blood Moor), cenário da aceitação | 16,9 / 18,7 | | **7,2 / 7,7** |
+
+  Sombras translúcidas (`legacy_blended_shadows` 1 → 0): sem diferença de CPU (57,1/57,8 → 57,9/57,5 FPS com limite de 60).
+  Cada fonte de luz (monstro, magia, tocha) pesa na luz alta, o que casa com a queda de FPS nas cenas de magias azuis. O visual
+  muda pouco: some o foco de luz forte em volta do herói e a iluminação fica mais uniforme (capturas lado a lado em
+  `build/evidence-luz-baixa/`, não versionadas por serem arte do jogo).
+- **Mudança**: o D2Autorun aplica a cada boot `[Desempenho] QualidadeLuz=0` do `d2nx.ini` no `preferences.json` (edição textual, grava
+  num temporário e troca; só mexe se o arquivo já existe — numa instalação limpa o Median XL cria o arquivo com luz alta (`legacy_light_quality=2`, conferido no teste de criação de personagem) e o ajuste vale do segundo boot em diante;
+  `-1` deixa como o jogador escolheu). `SombrasTranslucidas=-1` (não mexe). Para voltar ao visual anterior: `QualidadeLuz=2`.
+  Validado: `D2Autorun.log` registra `legacy_light_quality = 0`, o jogo roda a 59,7-60,1 FPS e a thread principal cai de 98% (saturada: o quadro custava
+  quase todo o orçamento de 16,7 ms) para 55-63%, ou seja, sobra folga para as cenas pesadas.
+- **Atenção ao ler quadros > 33 ms no Ryujinx**: com luz baixa e o limite de 60 FPS ligado, o `[PERF]` do Ryujinx mostra 9-19 quadros
+  > 33 ms por janela de 5 s (com luz alta: 0,3-1,5; com luz baixa e sem limite, a 115 FPS: 0,6-0,9). O Ryujinx de teste roda com o vsync
+  desligado, então só o limitador por `Sleep` do D2GL segura os 60 FPS e o escalonador do host atrasa alguns acordares; com folga
+  no quadro isso aparece. É artefato do emulador: no console o `swap` espera o vsync, e as janelas de 60,0 FPS do log do usuário
+  (loja aberta, 16:36-16:37) saíram limpas (pior quadro 22-36 ms, 0-1 quadros > 33 ms por janela). Comparar custo de quadro só sem o limite.
+- **Correção da medição (importante)**: o Ryujinx de teste usava o backend de áudio `Dummy`, que devolve os buffers na hora; o mixer do
+  DirectSound do Wine (thread `56`, `DSOUND.dll`) rodava sem freio em ~80% de um núcleo e parecia um grande problema (e variava de 3% a 88% entre
+  rodadas, conforme o estado do áudio). Com áudio em tempo real (SDL3, volume 0) são ~25%. `tools/medir_fluidez_ryujinx.sh`
+  agora fixa esse backend no `Config.json` do teste. Sem esse ajuste, comparações de CPU por thread não valem.
+- **Mapa das threads** (`[THR]` no `d2nxpad.log`, também no console): `4` principal (nenhuma thread parte de `D2Game.dll`, então a lógica do servidor do jogo roda nela);
+  `12`,`16` Fog; `20` D2NXPad; `24` Storm (carga de arquivos); `28` D2GL (`glide3x.dll`); `32`,`52` mmdevapi; `56` DSOUND (mixer);
+  `60` D2sound. Funções GL (`gl_top` do runtime): 491 = `glBufferSubData`, 2449 = `glTexSubImage3D`, 12 = `wglSwapBuffers`,
+  23 = `glClear`, 80 = `glDrawElements`, 856 = `glFenceSync`, 531 = `glClientWaitSync`. Atenção: `glBufferSubData` aparece com ~1,4 ms
+  por chamada no Ryujinx, mas isso pode ser, em parte, custo do emulador (hipótese, não medida); não otimizar por esse número sem medir no console.
+- **Box64** (tudo no mesmo cenário, 2 rodadas, regime): padrão do projeto (`SAFEFLAGS=0`) 56,0 e 57,5 FPS; `BIGBLOCK=0` 42,7 e 42,5
+  (**-25%**); `BIGBLOCK=1` 55,9 (igual) e uma rodada derrubou o Ryujinx. Ficam `SAFEFLAGS=0` e o `BIGBLOCK` padrão.
+- **Soak de 12 min** (cidade, `medir_fluidez_ryujinx.sh soak_1 720`): sem vazamento — heap 877 → 879 MB, código traduzido 16/32 MB
+  constante, 58,5 FPS médios. Não cobre áreas novas (o roteiro fica na cidade).
+- **Telemetria nova no `d2nxpad.log`** (a cada 30 s de partida, thread do D2NXPad): `[THR]` (threads com módulo), `[MEM]` (memória
+  física e endereços livres) e `[RT]` (últimas linhas `[PROGRESS]`, `[THREADS]` e `[DYNAREC]` do `autorun_runtime.log`, lidas por
+  `Z:\switch\wine\logs\`): **um único arquivo** leva memória de código traduzido (`code_mb=16/32`), heap, GL e áudio. Se um dia
+  o `code_mb` chegar a `N/N` e as travadas aparecerem, é esgotamento da memória de código (o runtime passa a interpretar; a opção
+  `BOX64_DYNAREC_PURGE=1` existe para isso, mas não foi ligada: não dá para exercitá-la no Ryujinx).
+- **Ferramentas novas**: `tools/analisar_perf_log.py <d2nxpad.log>` (FPS por nível/modo e por minuto, quadros > 500 ms, degraus de
+  vsync, diagnóstico), `tools/coletar_logs_console.py <raiz do SD>` (copia os 3 logs do cartão e resume),
+  `tools/medir_campo_ryujinx.sh` (cenário da aceitação sem limite de FPS, resumo por nível).
+- **Em aberto**: (1) confirmar no console o ganho da luz baixa (esperado: Stony Field perto de 60); (2) as travadas de segundos com o
+  inventário aberto; (3) se ainda sobrar custo em cenas pesadas, sessão com `profile=1` no `Game.wine-nx.txt` (o runtime lista os
+  módulos x86 mais quentes por thread, só no console — no Ryujinx derruba o emulador).

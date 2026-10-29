@@ -9,6 +9,7 @@
 #              WINE_NX_TXT=<arquivo> acrescenta linhas ao Game.wine-nx.txt; D2NX_INI_EXTRA=<arquivo> acrescenta ao [Video] do d2nx.ini;
 #              NO_BOX64=1 mede sem o Game.box64.txt do projeto;
 #              KEEP_SD=1 nao remonta a arvore do SD (usa o que ja esta em build/ryujinx-test)
+#              MAX_S=<s> tempo maximo da rodada (padrao 420; para janelas longas use janela+300)
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BASE_DIR"
 LABEL="${1:-teste}"; WIN="${2:-75}"
@@ -18,6 +19,17 @@ D2="$WINE/drive_c/DiabloII"
 OUT=build/fluidez/$LABEL
 if pgrep -f "^/tmp/ryujinx-d2" >/dev/null; then echo "ERRO: outro Ryujinx de teste ja esta rodando"; exit 1; fi
 mkdir -p "$OUT"
+# Audio em tempo real (SDL3, volume 0): com o backend "Dummy" o Ryujinx devolve os buffers na hora e o mixer do DirectSound do
+# Wine (thread DSOUND) roda sem freio, em ~80% de um nucleo; com audio em tempo real sao ~25%. Medicoes feitas com "Dummy"
+# distorcem o [THREADS] (28/10/2026).
+python3 - "$ROOT/Config.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+c = json.load(open(p))
+if c.get("audio_backend") != "SDL3" or c.get("audio_volume") != 0:
+    c["audio_backend"], c["audio_volume"] = "SDL3", 0
+    json.dump(c, open(p, "w"), indent=2)
+PY
 [ -n "$KEEP_SD" ] || python3 tools/assemble_sd_tree.py >/dev/null 2>&1 || { echo "ERRO: montagem do SD falhou"; exit 1; }
 INI="$D2/d2nx/d2nxpad.ini"
 sed -i '/^AutoCreate=/d; /^MenuTest=/d; /^SkillTest=/d; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk='$((WIN + 20))'/' "$INI"
@@ -42,7 +54,7 @@ ln -sf "$(which ryujinx)" /tmp/ryujinx-d2
 nice -n 10 /tmp/ryujinx-d2 --root-data-dir "$BASE_DIR/$ROOT" --handheld-mode --hide-updates \
     "$BASE_DIR/$ROOT/hbl/ncas/nca-1.nca" > "$ROOT/ryu.log" 2>&1 &
 RYU=$!
-t_in=0; end=$((SECONDS + 420))
+t_in=0; end=$((SECONDS + ${MAX_S:-420}))
 while [ $SECONDS -lt $end ] && kill -0 $RYU 2>/dev/null; do
     sleep 1
     if grep -q 'SUCESSO: Personagem entrou' "$D2/d2nx/d2nxpad.log" 2>/dev/null; then
