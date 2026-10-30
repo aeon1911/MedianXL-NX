@@ -7,7 +7,8 @@ Copia (sao sobrescritos a cada partida, entao rode logo depois de jogar):
   switch/wine/drive_c/DiabloII/d2nx/d2nxpad.log   [PERF] (FPS, quadros lentos), [THR], [MEM], [RT] (copia do log do runtime)
   switch/wine/drive_c/DiabloII/D2Autorun.log      boot do D2Autorun
   switch/wine/logs/autorun_runtime.log            [PROGRESS], [THREADS], [DYNAREC] (memoria de codigo do tradutor), [PROF]
-Depois imprime o resumo do d2nxpad.log (tools/analisar_perf_log.py)."""
+Depois imprime o resumo do d2nxpad.log (tools/analisar_perf_log.py) e o cruzamento com a telemetria do runtime
+(tools/correlacionar_runtime_console.py)."""
 import os
 import shutil
 import subprocess
@@ -38,10 +39,14 @@ def main():
         shutil.copy2(src, out)
         got[os.path.basename(rel)] = out
         print(f"  copiado {rel} ({os.path.getsize(out)} bytes) -> {out}")
+    here = os.path.dirname(os.path.abspath(__file__))
     log = got.get("d2nxpad.log")
     if log:
         print()
-        subprocess.call([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "analisar_perf_log.py"), log])
+        subprocess.call([sys.executable, os.path.join(here, "analisar_perf_log.py"), log])
+    if len(got) == len(FILES):
+        print("\nruntime x pad (tools/correlacionar_runtime_console.py):")
+        subprocess.call([sys.executable, os.path.join(here, "correlacionar_runtime_console.py"), dest])
     return 0
 
 
