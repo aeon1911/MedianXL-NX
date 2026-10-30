@@ -111,7 +111,7 @@ def deploy_game_files(target_d2):
     # 1. Copiar DLLs e executavel
     critical_files = [
         "Game.exe",           # PE injetado com .d2auto
-        "D2Autorun.dll",      # v0.4.4
+        "D2Autorun.dll",      # v0.4.5
         "Fog.dll",            # Patched sem o bug de critical section
         "D2Sigma.dll",        # Median XL 2.14.6
         "glide3x.dll",        # D2GL OpenGL wrapper
@@ -144,7 +144,8 @@ def deploy_game_files(target_d2):
             continue
         seen_mpqs.add(canonical)
         dst = os.path.join(target_d2, canonical)
-        if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(mpq):
+        if (not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(mpq)
+                or os.path.getmtime(mpq) > os.path.getmtime(dst) + 1):   # mtime: o overlay de tabelas muda o conteudo sem mudar o tamanho
             log(f"  Copiando MPQ: {canonical} ({os.path.getsize(mpq) // 1024} KB)")
             shutil.copy2(mpq, dst)
 
@@ -329,8 +330,33 @@ def create_ryu_case_symlinks(d2_dir):
             except Exception:
                 pass
 
+def apply_mpq_overlay():
+    """As tabelas do Median XL (XP, runas, unicos/raros, vendedores) so valem DENTRO do medianxl-data.mpq.
+
+    O D2Sigma.dll le essas tabelas pela Storm, direto do MPQ; arquivos soltos em data/global/excel/ so valem para as
+    tabelas que o D2Common carrega pelo Fog (-direct), como o charstats.bin. Medido no Ryujinx (29/10/2026): a Storm do
+    jogo devolve o CRC do MPQ original, nao o do arquivo solto, e a loja da Akara nao ganhou o item novo. Por isso o
+    tools/patch_gameplay.py gera as tabelas numa pasta e o build/bin/mpq_overlay as grava (sem compressao, so se mudaram)
+    no medianxl-data.mpq de build/test_game, de onde ele e copiado para dist/ e para o SD de teste."""
+    import subprocess
+    from patch_gameplay import patch_tables
+    mpq = os.path.join(SRC_GAME, "medianxl-data.mpq")
+    tool = os.path.join(BASE_DIR, "build/bin/mpq_overlay")
+    ini_file = os.path.join(BASE_DIR, "sd-card/switch/wine/drive_c/DiabloII/d2nx/d2nxpad.ini")
+    if not os.path.exists(mpq):
+        log("ALERTA: build/test_game/medianxl-data.mpq ausente: tabelas de gameplay nao entram no MPQ")
+        return
+    if not os.path.exists(tool):
+        sys.exit("[ASSEMBLE-SD] ERRO: build/bin/mpq_overlay nao existe (rode tools/build_tools.sh)")
+    overlay = os.path.join(BASE_DIR, "build/gameplay_overlay")
+    shutil.rmtree(overlay, ignore_errors=True)
+    patch_tables(overlay, ini_file)
+    subprocess.run([tool, mpq, overlay], check=True)
+
+
 def main():
     log("=== Iniciando montagem da arvore SD final ===")
+    apply_mpq_overlay()
     DIST_SWITCH = os.path.join(BASE_DIR, "dist/sd-card/switch")
     RYU_SWITCH = os.path.join(BASE_DIR, "build/ryujinx-test/sdcard/switch")
     ROOT_SWITCH = os.path.join(BASE_DIR, "sd-card/switch")

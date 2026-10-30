@@ -1,0 +1,21 @@
+# Estoque dos vendedores: Akara (npc 148) abre a loja pelo B + TRADE e a aba Misc mostra os consumiveis (Full Rejuvenation
+# Potion em todos os vendedores, tools/patch_gameplay.py). Tudo pelos botoes do controle.
+wait 11000
+npc 148
+waitpanel 08 6000
+wait 1000
+pad Down
+wait 300
+pad A
+waitpanel 0C 4000
+wait 1500
+mark loja_aberta
+moveg 422 156
+wait 400
+click
+wait 2000
+mark aba_misc
+dumpinv
+pad B
+wait 1000
+mark fim

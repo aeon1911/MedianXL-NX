@@ -35,7 +35,7 @@ BASE_MPQS = ["d2char.mpq", "d2data.mpq", "d2exp.mpq", "d2music.mpq", "d2sfx.mpq"
              "d2video.mpq", "d2xmusic.mpq", "d2xtalk.mpq", "d2xvideo.mpq"]
 # do pacote do Median XL: tudo menos os medianxl-*.mpq (vao juntos), o launcher e wrappers nao usados
 MXL_SKIP = {"ddraw.dll", "d2fps.dll", "diablo ii.exe"}
-TABLES = ["experience_sp.bin", "itemratio_sp.bin", "treasureclassex.bin"]
+TABLES = ["experience_sp.bin", "itemratio_sp.bin", "treasureclassex.bin", "npcstores.bin"]
 REPO_FILES = ["d2gl.ini", "lootfilterconf.json", "data/local/use", "d2nx/d2nxpad.ini", "d2nx/d2nx.ini"]
 
 # D2Sigma.dll 2.14.6 (md5 db7bdf53537caead9d3a09318eee38af): ImageBase 0x10000000, .text em RVA 0x1000 /

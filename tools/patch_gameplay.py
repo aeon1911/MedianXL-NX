@@ -18,6 +18,7 @@ def load_gameplay_cfg(ini_path):
     unique_mult = 1.5
     rare_mult = 1.5
     start_gold = 10000
+    rejuv = 1
 
     if os.path.exists(ini_path):
         with open(ini_path, "r", encoding="utf-8", errors="replace") as f:
@@ -36,16 +37,17 @@ def load_gameplay_cfg(ini_path):
                         elif k in ("MultiplicadorUnicos", "UniqueMultiplier"): unique_mult = float(v)
                         elif k in ("MultiplicadorRaros", "RareMultiplier"): rare_mult = float(v)
                         elif k in ("OuroInicial", "StartingGold"): start_gold = int(v)
+                        elif k in ("RejuvenescimentoNosVendedores", "VendorRejuvenation"): rejuv = int(v)
                     except Exception:
                         pass
-    return xp_mult, rune_mult, unique_mult, rare_mult, start_gold
+    return xp_mult, rune_mult, unique_mult, rare_mult, start_gold, rejuv
 
 def patch_tables(target_d2_dir, ini_path=None):
     if not ini_path:
         ini_path = os.path.join(target_d2_dir, "d2nx/d2nxpad.ini")
     
-    xp_mult, rune_mult, unique_mult, rare_mult, start_gold = load_gameplay_cfg(ini_path)
-    print(f"[GAMEPLAY] Multiplicadores carregados: XP={xp_mult}x, Runas={rune_mult}x, Unicos={unique_mult}x, Raros={rare_mult}x, Ouro={start_gold}")
+    xp_mult, rune_mult, unique_mult, rare_mult, start_gold, rejuv = load_gameplay_cfg(ini_path)
+    print(f"[GAMEPLAY] Multiplicadores carregados: XP={xp_mult}x, Runas={rune_mult}x, Unicos={unique_mult}x, Raros={rare_mult}x, Ouro={start_gold}, Rejuvenescimento nos vendedores={rejuv}")
 
     excel_dir = os.path.join(target_d2_dir, "data/global/excel")
     orig_dir = os.path.join(BASE_DIR, "build/gameplay_orig")
@@ -112,6 +114,37 @@ def patch_tables(target_d2_dir, ini_path=None):
     with open(os.path.join(excel_dir, "treasureclassex.bin"), "wb") as f:
         f.write(tc_data)
     print(f"[GAMEPLAY]   treasureclassex.bin gerado ({rune_mods} entradas de runas com {rune_mult}x)")
+
+    # 5. Vendedores: Full Rejuvenation Potion ("rvl ") no estoque de todos os NPCs de npcstores.bin.
+    # O Median XL guarda o estoque de cada vendedor em npcstores.bin (registros de 52 bytes: NPC, codigo do item, depois
+    # bytes de configuracao; as linhas de pocao/chave de Akara, Cain... sao "01 01 01 01" + zeros: sempre em estoque em
+    # todas as dificuldades). Cada NPC ganha uma linha igual a de uma pocao, com o codigo trocado. Como as linhas de
+    # alguns NPCs (200, 176) ja aparecem intercaladas, as novas vao no fim da tabela.
+    out_ns = os.path.join(excel_dir, "npcstores.bin")
+    if rejuv:
+        with open(orig_table("npcstores.bin"), "rb") as f:
+            ns = bytearray(f.read())
+        rec = 52
+        n = struct.unpack("<I", ns[:4])[0]
+        assert len(ns) == 4 + n * rec, "npcstores.bin: tamanho inesperado"
+        rows = [bytes(ns[4 + i * rec:4 + (i + 1) * rec]) for i in range(n)]
+        tmpl = next((r[8:] for r in rows if r[4:8] == b"hp1 " and r[8:12] == b"\x01\x01\x01\x01"), None)
+        if tmpl is None:
+            sys.exit("[GAMEPLAY] ERRO: npcstores.bin sem linha de pocao 'hp1 ' para servir de modelo")
+        npcs = []
+        for r in rows:
+            if r[:4] not in npcs: npcs.append(r[:4])
+        added = 0
+        for npc in npcs:
+            if any(r[:4] == npc and r[4:8] == b"rvl " for r in rows): continue
+            rows.append(npc + b"rvl " + tmpl)
+            added += 1
+        with open(out_ns, "wb") as f:
+            f.write(struct.pack("<I", len(rows)) + b"".join(rows))
+        print(f"[GAMEPLAY]   npcstores.bin gerado (Full Rejuvenation Potion em {added} vendedores de {len(npcs)})")
+    elif os.path.exists(out_ns):
+        os.remove(out_ns)
+        print("[GAMEPLAY]   npcstores.bin removido (estoque original dos vendedores)")
 
     # 4. CharStats: NAO MODIFICAR.
     # Inserir "gld " como item inicial cria um item de ouro invalido no inventario do personagem novo,

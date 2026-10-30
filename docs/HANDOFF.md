@@ -1,18 +1,30 @@
-# HANDOFF — retomar o projeto (troca de distro, 28/10/2026)
+# HANDOFF — retomar o projeto (troca de distro 28/10/2026; atualizado em 29/10)
 
 Ponto de partida: `origin/main` (https://github.com/aeon1911/MedianXL-NX). Leia antes `CLAUDE.md`, `AGENTS.md`,
-`RULES.md` (regras permanentes) e `docs/D2PAD_CHANGES.md` (seções E a M = o que foi feito e medido).
+`RULES.md` (regras permanentes) e `docs/D2PAD_CHANGES.md` (seções E a N = o que foi feito e medido).
 `docs/STATUS.md`, `ARQUITETURA.md`, `CONTROLES.md`, `PROGRESSO.md` descrevem abordagens antigas: nao usar como verdade.
 
 ## Estado
 - Funciona no console (Switch Lite, portátil): boot, jogo, andar/atacar nativos, habilidades, seletor de habilidades
   (+ e ZR/ZL), menus, criação de personagem, teclado de nome (R3).
+- Regressão no Ryujinx (29/10, build 1.2.0): aceitação 17/17, criação de personagem em console novo 2/2, barra de baixo (roteiro `barra_hud`), vendedor (Akara), andar+habilidade.
 - Regressão no Ryujinx (28/10): aceitação 17/17 (na 1ª rodada 16/17: o critério "troca de alvo" depende de um monstro chegar a tempo;
   passou na 2ª), seletor 10/10, menus 16/16, criação 2/2, com o D2NXPad 1.1.1+telemetria. O 1.1.2 do pacote só muda o número da versão e o
   texto do INI padrão; nele foram repetidos o seletor (10/10) e a rodada de fluidez (60 FPS, `[THR]`/`[RT]` no log).
-- Pacote: `dist/d2-medianxl-autorun-switch-2.14.6-final.zip` (28/10, luz baixa + telemetria nova; SHA256
-  f1564cbdd9f9e0cca790b0ce37de17e14c352eb2f700a5c409a711c813ed4382). Anteriores: `-final-27out.zip` (o que gerou o log de 28/10),
+- Pacote: `dist/d2-medianxl-autorun-switch-2.14.6-final.zip` (29/10, D2NXPad 1.2.0 + D2Autorun 0.4.5; SHA256
+  48a41e59e5c7e54e35adcb8c3e9f18b26a6f1b188291b6c61a6eabc88b3f12dd). Anteriores: `-final-28out.zip` (luz baixa + telemetria, SHA
+  f1564cbdd9f9e0cca790b0ce37de17e14c352eb2f700a5c409a711c813ed4382; gerou o log de 29/10), `-final-27out.zip` (o que gerou o log de 28/10),
   `-final-seletor.zip`, `-final-24out.zip`. DLLs e zips NAO vao para o git (so as fontes).
+
+## 29/10: o que mudou depois do log do console (detalhes e números em `docs/D2PAD_CHANGES.md` N)
+- 1º boot: o D2Autorun cria o `preferences.json` com luz baixa (antes a 1ª partida inteira rodava com luz alta).
+- Movimento: espera a animação de ataque terminar (`[Movimento] EsperarAcao=1`) e anda direto com stamina baixa (`AndarCansado=1`).
+- Barra de baixo: direcional com painel aberto + ZL = HUD (`[Painel] ZL=HUD`).
+- **Tabelas dentro do MPQ**: `build/bin/mpq_overlay` (compilar com `tools/build_tools.sh`) grava as tabelas do `patch_gameplay.py` no
+  `build/test_game/medianxl-data.mpq` (feito pelo `assemble_sd_tree.py`). Os multiplicadores de XP/runas/únicos/raros passam a valer (antes não valiam);
+  `RejuvenescimentoNosVendedores=1` põe a Full Rejuvenation nos 18 vendedores. O menu de cheats continua sem efeito em tempo real.
+- Para o usuário copiar: o `medianxl-data.mpq` muda (548 MB), então o pacote inteiro precisa ser recopiado.
+- Falta no console: jogar ~10 min (campo + área nova) e mandar os logs; comparar o FPS com a luz baixa e conferir se as travadas de SD continuam.
 
 ## Stutter no console: causa provável tratada em 28/10 (confirmar no console)
 Log do console recebido em 28/10 (24 min, Stony Field incluído) e analisado em `docs/D2PAD_CHANGES.md` seção M. Resumo: cidade a 60 FPS,

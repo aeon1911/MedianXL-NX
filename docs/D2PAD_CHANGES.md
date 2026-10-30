@@ -295,7 +295,7 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
   muda pouco: some o foco de luz forte em volta do herói e a iluminação fica mais uniforme (capturas lado a lado em
   `build/evidence-luz-baixa/`, não versionadas por serem arte do jogo).
 - **Mudança**: o D2Autorun aplica a cada boot `[Desempenho] QualidadeLuz=0` do `d2nx.ini` no `preferences.json` (edição textual, grava
-  num temporário e troca; só mexe se o arquivo já existe — numa instalação limpa o Median XL cria o arquivo com luz alta (`legacy_light_quality=2`, conferido no teste de criação de personagem) e o ajuste vale do segundo boot em diante;
+  num temporário e troca; na 1ª vez (arquivo ainda inexistente) o Median XL o criaria com luz alta (`legacy_light_quality=2`) e o ajuste só valia do segundo boot em diante — corrigido na seção N (o D2Autorun cria o arquivo com o padrão e a luz baixa);
   `-1` deixa como o jogador escolheu). `SombrasTranslucidas=-1` (não mexe). Para voltar ao visual anterior: `QualidadeLuz=2`.
   Validado: `D2Autorun.log` registra `legacy_light_quality = 0`, o jogo roda a 59,7-60,1 FPS e a thread principal cai de 98% (saturada: o quadro custava
   quase todo o orçamento de 16,7 ms) para 55-63%, ou seja, sobra folga para as cenas pesadas.
@@ -328,3 +328,60 @@ com o `AutoCreate`, sem saves no SD de teste, como num console novo.
 - **Em aberto**: (1) confirmar no console o ganho da luz baixa (esperado: Stony Field perto de 60); (2) as travadas de segundos com o
   inventário aberto; (3) se ainda sobrar custo em cenas pesadas, sessão com `profile=1` no `Game.wine-nx.txt` (o runtime lista os
   módulos x86 mais quentes por thread, só no console — no Ryujinx derruba o emulador).
+
+### N. 29/10/2026 — 1º boot com luz baixa, andar + habilidade, barra de baixo pelo direcional, vendedores e tabelas dentro do MPQ
+
+**Log do console de 29/10** (primeira partida num cartão novo; o usuário mandou `d2nxpad.log` e `D2Autorun.log`, o `autorun_runtime.log` foi lido do cartão pelo MTP):
+
+- **A sessão inteira rodou com luz alta**: `preferences.json ainda nao existe` (o ajuste da seção M só valia do 2º boot em diante). FPS de 24 a 50 no campo,
+  pior quadro 1,3 s. **Correção**: o D2Autorun cria o `preferences.json` com o padrão do Median XL (modelo gravado no próprio `d2autorun.c`, conferido contra o
+  arquivo que o jogo gerou no console) já com `legacy_light_quality=0`. Validado no Ryujinx simulando console novo (`run_ryujinx_fresh_test.sh`):
+  `D2Autorun.log` registra a criação, o arquivo final fica com luz 0 e a criação do personagem passa 2/2.
+- **Onde o tempo vai (`autorun_runtime.log` do console, 266 s)**: a thread principal fica em 75-95% de um núcleo e o GL ocupa 7-9 s a cada 10 s (≈ 16 ms de um
+  quadro de ≈ 22 ms). Quatro funções somam 92% desse tempo: `glBufferSubData` ≈ 4,2 ms por chamada (≈ 10 ms por quadro), `glClear` ≈ 2,4 ms,
+  `glFenceSync` ≈ 1,1 ms, `glTexSubImage3D` ≈ 0,3 ms; as outras ≈ 58 mil chamadas por 10 s custam só 0,6 s. No Ryujinx o GL custa 6 ms por quadro,
+  então o gargalo do console é o driver/GPU do Tegra, e a luz baixa (menos geometria por quadro, medido na seção M) é a alavanca que existe.
+  Não há esgotamento de nada: código traduzido 18/48 MB, heap 900 de 2048 MB, 0 compactações.
+- **As travadas de ≈ 1 s** (8 de 300 ms a 1,3 s em 4,5 min) **coincidem com a leitura do cartão**: nas janelas de 10 s com `sd_ms` de 400 a 1300 ms estão as
+  travadas; nas de 38 a 100 ms de `sd_ms` não há nenhuma. São cargas de área e de monstros novos (o runtime lê o SD a 39-42 MB/s: 0,83 ms por pedido mais a
+  transferência, em blocos de 128 KB, 8 por arquivo). Não há configuração do runtime para isso; só um cartão mais rápido ou menos dados por área ajudaria.
+- O `[RT]` do `d2nxpad.log` não funciona no console (`erro 2`: o runtime mantém o log aberto): os logs agora são lidos direto do cartão.
+
+**"Bárbaro deslizando" e "a habilidade gasta mana e não sai"** (reproduzido no Ryujinx, `tools/roteiros/andar_skill.txt`, modo do herói por quadro):
+
+- Causa: o movimento voltava a mandar ordem de andar assim que o botão da habilidade era solto, e a ordem de andar **corta a animação de ataque antes do
+  quadro de ação** (o servidor já descontou a mana ao receber o comando). Antes da correção, com o analógico segurado e X tocado por 100 ms: 2 de 3 toques deram
+  modo 7 (ataque) por 100 ms e voltaram a correr, 1 de 3 nem entrou em modo de ataque. O tempo de uma animação completa é de 550-670 ms.
+- Correção (`action_in_progress` em `game_frame`): nenhuma ordem de andar, nem o "pare aqui" do analógico solto, enquanto o herói está em modo de ação (7-19)
+  ou até 200 ms depois do comando; trava de segurança de 2,5 s; herói morto (modos 0/17) não recebe ordem (antes a ordem de correr "ressuscitava" o modo do corpo).
+  `[Movimento] EsperarAcao=0` volta ao comportamento antigo (teste A/B). Depois: 4 de 4 toques completaram a animação (554-667 ms em modo 7/8).
+- **Andar/correr alternando (2↔3) com pouca stamina**: o jogo troca correr por andar a cada poucos quadros quando a stamina acaba (antes: 11 trocas em 1,8 s,
+  a animação reiniciando a cada troca = o "flicar"). Com `[Movimento] AndarCansado=1` (padrão) o analógico anda direto quando a stamina cai abaixo de 12% e só volta a
+  correr acima de 35%; no mesmo cenário: no máximo 1 troca por trecho de 2-3 s. A stamina vem da lista de atributos do herói (ids 10 e 11, 8 bits de fração).
+- Atenção ao testar: os dois personagens de teste são nível 3 e morrem poucos segundos depois de entrar no Blood Moor (um grupo de Fallen no portão). Uma
+  rodada em que o herói morre não vale (o log mostra `vida -1` e os modos 0/17). A vida atual do Σ não aparece na lista de atributos (só a máxima, id 7).
+
+**Barra de baixo pelo direcional**: com um painel aberto, o direcional agora chega aos botões da barra (habilidade esquerda, os 9 botões do mini painel — personagem,
+inventário, habilidades, mapa... — e habilidade direita), medidos na captura (1024x768): mini painel em (res/2 − 185 + 32·k, res_y − 27), habilidades em
+(res/2 − 261, res_y − 30) e (res/2 + 307, res_y − 30). Baixo no fim do inventário desce para a barra; esquerda/direita ficam na barra; cima volta ao painel.
+**ZL no painel = `HUD`** (pula para o 1º botão do mini painel; de novo, volta ao painel). Painéis sem alvos próprios (personagem, habilidades) seguem em passos livres
+até o cursor entrar na barra. Validado (`tools/roteiros/barra_hud.txt`): 12× Baixo → botão da habilidade direita (820,738); Direita na ponta fica; ZL → (327,741);
+3º botão mostra a dica "Skill Tree (T)" e o A abre a árvore de habilidades.
+
+**As tabelas do Median XL só valem dentro do MPQ (achado importante)**: o `D2Sigma.dll` lê `experience_sp.bin`, `itemratio_sp.bin`, `treasureclassex.bin` e
+`npcstores.bin` pela Storm, direto do `medianxl-data.mpq`. Arquivos soltos em `data\global\excel\` só valem para tabelas que o D2Common carrega pelo Fog (`-direct`),
+como o `charstats.bin`. Medido: a Storm do jogo devolvia o CRC do MPQ original (`npcstores` 4decf662, `experience_sp` 2a6858e9, `itemratio_sp` ad6ebf74), não o do arquivo
+solto, e o personagem de teste (nível 3 com 1975 de XP) bate com a tabela original, não com a dividida por 2. **Ou seja, os multiplicadores de XP, runas, únicos e raros
+nunca tiveram efeito.** Agora `tools/mpq_overlay.cpp` grava as tabelas geradas pelo `patch_gameplay.py` dentro do `medianxl-data.mpq` (sem compressão, só se mudaram; a Storm
+do 1.13c não descomprime zlib) e `assemble_sd_tree.py` faz isso em `build/test_game` antes de copiar para `dist/` e para o SD de teste. Validado: a Storm do jogo
+devolve os CRCs novos. **Os multiplicadores passam a valer** (2x XP, 2x runas, 1,5x únicos e raros; `[Gameplay]` no `d2nxpad.ini`, 1.0 desliga). O **menu de cheats** (ZL+−) continua
+só escrevendo arquivos soltos: mudar um multiplicador por ele não tem efeito no jogo (precisaria interceptar a Storm; fica em aberto).
+
+**Full Rejuvenation Potion em todos os vendedores**: o estoque de cada vendedor está em `npcstores.bin` (registros de 52 bytes: NPC, código do item e bytes de
+configuração; as linhas de poção são `01 01 01 01` + zeros). `patch_gameplay.py` acrescenta uma linha `rvl ` (cópia da linha da poção `hp1`) para cada um dos 18 NPCs
+da tabela (`[Gameplay] RejuvenescimentoNosVendedores=1`; 0 = estoque original). Validado na Akara (`tools/roteiros/vendedores.txt`): a aba Misc mostra chave, poção de vida, de mana e a
+nova poção roxa (classe 1236 = índice 72 do `misc.bin` = `rvl`). Os outros 17 vendedores não foram abertos no emulador (Charsi, Gheed... ficam longe do ponto inicial): a linha é a mesma.
+
+**Ferramentas e roteiros**: `tools/roteiros/{andar_skill,barra_hud,vendedores,stats,storm}.txt`; `run_script_ryujinx.sh` ganhou `INI_SET="Secao.Chave=valor;..."` (A/B)
+e `PRE_RUN="comando"`; comandos de roteiro novos: `stick ... nb` (analógico segurado sem bloquear o roteiro), `stats` (atributos do herói), `storm <arquivo>` (tamanho e CRC como a Storm
+do jogo enxerga); `[WF]` agora traz `vida mana stam` e `[WO]` cada ordem de movimento; `tools/mpq_overlay`.

@@ -18,7 +18,7 @@
 #include <ctype.h>
 #include <wchar.h>
 
-#define PAD_VERSION "1.1.2"
+#define PAD_VERSION "1.2.0"
 
 /* ======================================================================================
  * utilidades
@@ -79,7 +79,7 @@ enum Btn { B_A, B_B, B_X, B_Y, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_L3, B_R3
 static const char *btn_names[B_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
                                           "L3", "R3", "Up", "Down", "Left", "Right" };
 enum ActKind { A_NONE, A_ATTACK, A_SKILL, A_RIGHT, A_KEY, A_HOLD, A_LCLICK, A_RCLICK, A_SHIFTCLICK,
-               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD, A_OSK, A_INTERACT };
+               A_CTRLCLICK, A_SHIFTRCLICK, A_LAYER, A_PLUS, A_NAV, A_POPUP_R, A_POPUP_L, A_TYPENAME, A_KEYBOARD, A_OSK, A_INTERACT, A_HUD };
 typedef struct { BYTE kind; BYTE vk; BYTE mods; BYTE n; } Act;  /* mods: 1 shift 2 ctrl 4 alt */
 enum Ctx { C_GAME, C_LAYER, C_PLUS, C_PANEL, C_MENU, C_COUNT };
 static const char *ctx_names[C_COUNT] = { "Jogo", "Jogo.ZL", "Jogo.Mais", "Painel", "Menu" };
@@ -93,7 +93,7 @@ static struct {
     int aim, aim_range, aim_cone, melee_range, interact_range, body_offset, ranged_distance;
     int stand_attack, repeat_ms;
     float cursor_speed, cursor_curve;
-    int nav_step, nav_delay, nav_rate;
+    int nav_step, nav_delay, nav_rate, act_wait, tired_walk;
     int panel_shift;
     int skill_delay_ms;
     int autojoin, autowalk, autocreate, cursortest, menutest, skilltest, itemtest, item_x, item_y, readtest, item_delay, walktest;
@@ -118,7 +118,7 @@ static const char *default_ini =
 "; D2NXPad " PAD_VERSION " - controle estilo Diablo II Resurrected (Nintendo Switch)\n"
 "; Botoes com nomes do Switch (posicionais). Apague para restaurar o padrao.\n"
 "; Acoes: ATTACK SKILL:n RIGHT KEY:<tecla> KEY:SHIFT+<tecla> HOLD:<tecla> LCLICK RCLICK\n"
-";        SHIFTCLICK CTRLCLICK SHIFTRCLICK LAYER PLUS NAV POPUP_R POPUP_L NONE\n"
+";        SHIFTCLICK CTRLCLICK SHIFTRCLICK LAYER PLUS NAV POPUP_R POPUP_L HUD NONE\n"
 "; Teclas: A-Z 0-9 F1-F12 TAB SPACE ENTER ESC SHIFT CTRL ALT UP DOWN LEFT RIGHT\n"
 "; ============================================================================\n"
 "[Geral]\n"
@@ -225,6 +225,7 @@ static const char *default_ini =
 "; inventario, bau, cubo, loja, menu do NPC: o direcional pula de item em item / casa em casa / opcao em opcao\n"
 "; (o analogico continua movendo o cursor livre). Loja: A num item abre a caixa Sim/Nao com o cursor no Sim;\n"
 "; direcional alterna Sim/Nao, B = Nao. Botao \"Organizar\" ao lado do inventario (ou menu de cheats).\n"
+"; Direcional para baixo chega a barra de baixo (personagem, habilidades, mapa...); ZL = HUD pula para ela e volta.\n"
 "[Painel]\n"
 "A=LCLICK\n"
 "Y=RCLICK\n"
@@ -232,7 +233,7 @@ static const char *default_ini =
 "B=KEY:ESC\n"
 "L=CTRLCLICK\n"
 "R=SHIFTRCLICK\n"
-"ZL=LAYER\n"
+"ZL=HUD\n"
 "ZR=RCLICK\n"
 "Plus=KEY:ESC\n"
 "Minus=KEY:TAB\n"
@@ -311,6 +312,7 @@ static Act parse_act(const char *v)
     else if (!lstrcmpiA(buf, "KEYBOARD")) a.kind = A_KEYBOARD;
     else if (!lstrcmpiA(buf, "OSK")) a.kind = A_OSK;
     else if (!lstrcmpiA(buf, "INTERACT")) a.kind = A_INTERACT;
+    else if (!lstrcmpiA(buf, "HUD")) a.kind = A_HUD;
     else if (!strncasecmp(buf, "KEY:", 4) || !strncasecmp(buf, "HOLD:", 5)) {
         char *k = buf + (buf[0] == 'K' || buf[0] == 'k' ? 4 : 5);
         a.kind = (buf[0] == 'K' || buf[0] == 'k') ? A_KEY : A_HOLD;
@@ -384,6 +386,8 @@ static void load_config(void)
     cfg.nav_step = ini_int("Cursor", "PassoNav", 29);
     cfg.nav_delay = ini_int("Cursor", "AtrasoNav", 260);
     cfg.nav_rate = ini_int("Cursor", "RepeticaoNav", 90);
+    cfg.act_wait = ini_int("Movimento", "EsperarAcao", 1);
+    cfg.tired_walk = ini_int("Movimento", "AndarCansado", 1);
     cfg.panel_shift = ini_int("Cursor", "DeslocamentoPainel", 0);
     cfg.autojoin = ini_int("AutoTest", "AutoJoin", 0);
     cfg.autowalk = ini_int("AutoTest", "AutoWalk", 0);
@@ -966,6 +970,24 @@ static int hand_skill(int right)
     return txt ? rd16(txt) : -1;
 }
 
+/* atributo da unidade (lista de atributos cheia: unidade+0x5C -> +0x48 vetor de {WORD camada, WORD id, DWORD valor}, +0x4C
+ * contagem). Vida/mana/stamina vem com 8 bits de fracao. -1 = nao achou (so diagnostico e decisao andar/correr) */
+static volatile DWORD *unit_stat_ptr(DWORD unit, int id)
+{
+    DWORD st = unit ? rd32(unit + 0x5C) : 0, arr, n, i;
+    if (!st) return NULL;
+    arr = rd32(st + 0x48); n = rd16(st + 0x4C);
+    if (!arr || n > 512 || !readable(arr, n * 8)) return NULL;
+    for (i = 0; i < n; i++)
+        if (rd16(arr + i * 8 + 2) == (DWORD)id && rd16(arr + i * 8) == 0) return (volatile DWORD *)(arr + i * 8 + 4);
+    return NULL;
+}
+static int unit_stat(DWORD unit, int id)
+{
+    volatile DWORD *p = unit_stat_ptr(unit, id);
+    return p ? (int)*p : -1;
+}
+
 typedef struct { DWORD unit; int type, cls, mode; DWORD flags; float x, y; } UnitInfo;
 
 static int unit_pos(DWORD u, int type, float *x, float *y)
@@ -1279,6 +1301,7 @@ static Act binding(int ctx, int b)
 {
     Act a = g_bind[ctx][b];
     if (ctx == C_LAYER && a.kind == A_NONE) a = g_bind[C_GAME][b];
+    if (ctx == C_PANEL && b == B_ZL && a.kind == A_LAYER) a.kind = A_HUD;      /* d2nxpad.ini antigo: ZL=LAYER no painel nao fazia nada */
     return a;
 }
 
@@ -1694,6 +1717,31 @@ static int npc_menu_options(float *x, float *ys, int max)
     return n;
 }
 
+/* Barra de baixo do Median XL (1024x768), medida na captura do Ryujinx: botao da habilidade esquerda, os 9 botoes do mini painel
+ * (personagem, inventario, habilidades, mapa...) e o botao da habilidade direita. Com um painel aberto o direcional chega neles
+ * como em qualquer outro alvo; antes so o cursor livre chegava. */
+#define HUD_N 11
+static int hud_rect(int i, float *x0, float *y0, float *x1, float *y1)
+{
+    float cx = g_resx / 2.0f;
+    if (i == 0) { *x0 = cx - 261 - 24; *x1 = cx - 261 + 24; *y0 = g_resy - 54.0f; *y1 = g_resy - 6.0f; }       /* habilidade esquerda */
+    else if (i == HUD_N - 1) { *x0 = cx + 307 - 24; *x1 = cx + 307 + 24; *y0 = g_resy - 54.0f; *y1 = g_resy - 6.0f; }  /* direita */
+    else { float x = cx - 185 + 32.0f * (i - 1); *x0 = x - 13; *x1 = x + 13; *y0 = g_resy - 39.0f; *y1 = g_resy - 15.0f; }
+    return 1;
+}
+static void nav_add_hud(void);
+static int hud_under(int mx, int my)
+{
+    int i;
+    float x0, y0, x1, y1;
+    for (i = 0; i < HUD_N; i++) {
+        hud_rect(i, &x0, &y0, &x1, &y1);
+        if (mx >= x0 - 3 && mx < x1 + 3 && my >= y0 - 3 && my < y1 + 3) return i;
+    }
+    return -1;
+}
+static int g_nav_own;                  /* alvos do proprio painel (sem a barra de baixo) */
+
 static int nav_build(void)
 {
     int inv_panel = ui_open(UI_INVENTORY) || ui_open(UI_NPCSHOP) || ui_open(UI_STASH) || ui_open(UI_CUBE) || ui_open(UI_TRADE);
@@ -1740,7 +1788,19 @@ static int nav_build(void)
     }
     if (sort_button_visible()) nav_add(SORT_BTN_X0, SORT_BTN_Y0, SORT_BTN_X1, SORT_BTN_Y1, NT_BTN, 0);
     if (ui_open(UI_CUBE)) nav_add_grid(g_player, 5, inv_rec(9), 1);
+    g_nav_own = g_nnt;
+    {   /* a barra de baixo entra quando o painel tem alvos proprios ou o cursor ja esta nela (personagem/habilidades:
+         * o direcional segue andando em passos livres ate chegar la) */
+        int mx = -1, my = -1;
+        if (g_nnt > 0 || (game_mouse(&mx, &my) && hud_under(mx, my) >= 0)) nav_add_hud();
+    }
     return g_nnt > 0;
+}
+static void nav_add_hud(void)
+{
+    int i;
+    float x0, y0, x1, y1;
+    for (i = 0; i < HUD_N; i++) { hud_rect(i, &x0, &y0, &x1, &y1); nav_add(x0, y0, x1, y1, NT_BTN, 2); }
 }
 static int nav_inside(const NavT *t, float x, float y) { return x >= t->x0 && x < t->x1 && y >= t->y0 && y < t->y1; }
 /* um passo do direcional: o alvo mais perto na direcao, preferindo os que se sobrepoem no eixo perpendicular */
@@ -1757,6 +1817,8 @@ static int nav_dir(int dx, int dy)
         const NavT *t = &g_nt[i];
         float vx = t->x - ox, vy = t->y - oy, along = vx * dx + vy * dy, gap, sc;
         if (i == cur) continue;
+        /* esquerda/direita fica na barra de baixo (ou no painel): sem isso, no botao da ponta o direcional pulava para o inventario */
+        if (dx && cur >= 0 && (g_nt[cur].area == 2) != (t->area == 2)) continue;
         /* tem de estar alem da borda do elemento atual na direcao */
         if (dx > 0 && t->x0 < bx1 - 1) continue;
         if (dx < 0 && t->x1 > bx0 + 1) continue;
@@ -1777,7 +1839,7 @@ static int nav_dir(int dx, int dy)
             if (d < bs) { bs = d; best = i; }
         }
     }
-    if (best < 0) return 1;                               /* nada nessa direcao: fica */
+    if (best < 0) return g_nav_own > 0;                  /* nada nessa direcao: fica (painel sem alvos proprios: passo livre) */
     move_cursor_exact(g_nt[best].x, g_nt[best].y);
     dbg("navegacao: %+d,%+d -> alvo %d (tipo %d) em %.0f,%.0f", dx, dy, best, g_nt[best].kind, g_nt[best].x, g_nt[best].y);
     return 1;
@@ -1799,6 +1861,20 @@ static void nav_home(void)
             if (sc < bs) { bs = sc; best = i; }
         }
     if (best >= 0) move_cursor_exact(g_nt[best].x, g_nt[best].y);
+}
+/* ZL no painel: pula para a barra de baixo (1o botao do mini painel) e, de novo, volta ao painel */
+static void hud_toggle(void)
+{
+    int mx = -1, my = -1;
+    float x0, y0, x1, y1;
+    if (g_resx != 1024 || g_resy != 768 || !game_mouse(&mx, &my)) return;
+    if (hud_under(mx, my) >= 0) {
+        nav_home();
+        if (game_mouse(&mx, &my) && hud_under(mx, my) >= 0) move_cursor(g_resx / 2.0f, g_resy / 2.0f);
+        return;
+    }
+    hud_rect(1, &x0, &y0, &x1, &y1);
+    move_cursor_exact((x0 + x1) / 2, (y0 + y1) / 2);
 }
 /* A no painel: se for um item da loja, a caixa Sim/Nao vai abrir */
 static int shop_item_under_cursor(void)
@@ -2038,6 +2114,7 @@ static void start_action(int b, Act a)
     case A_POPUP_R: do_popup(1); h->active = 0; if (g_mode == M_GAME && !ui_open(UI_MINISKILL)) park_cursor(); break;
     case A_POPUP_L: do_popup(0); h->active = 0; if (g_mode == M_GAME && !ui_open(UI_MINISKILL)) park_cursor(); break;
     case A_NAV: h->last = GetTickCount(); h->stage = 0; break;
+    case A_HUD: hud_toggle(); h->active = 0; break;
     case A_TYPENAME: type_string("Switch"); h->active = 0; break;
     case A_KEYBOARD: if (g_mode == M_GAME) open_keyboard(); else ned_begin(NULL); h->active = 0; break;
     case A_INTERACT: begin_interact(h); break;
@@ -2618,6 +2695,8 @@ static void move_frame(DWORD player, float px, float py, DWORD now, DWORD *last_
             }
         tgx = (float)bx; tgy = (float)by;
         do_command(player, (DWORD)bx, (DWORD)by, g_mv_run ? NC_RUN : NC_WALK);
+        if (g_walk_log) lg("[WO] %lu ordem %s %d,%d (modo %lu, parou %d, preso %d)", now, g_mv_run ? "correr" : "andar", bx, by, m,
+                           m != 2 && m != 3 && m != 6, now - still_t > 300);
         g_mv_tx = bx; g_mv_ty = by;
         g_mv_bin = bin;
         last_run = (int)g_mv_run;
@@ -2626,24 +2705,72 @@ static void move_frame(DWORD player, float px, float py, DWORD now, DWORD *last_
     }
 }
 
+/* Animacao de ataque/habilidade em andamento: uma ordem de andar (ou o "pare aqui" do analogico solto) corta o golpe antes
+ * do quadro de acao. O servidor ja descontou a mana ao receber a habilidade, entao ela "gastava mana e nao saia" (medido no
+ * Ryujinx: toque de 100 ms em X andando = modo 7 por 100 ms e logo de volta a correr, 3 de 3 toques). O movimento espera o
+ * heroi voltar a um modo livre; ACT_LOCK_MS cobre o atraso do modo apos o comando e ACT_MAX_MS evita ficar preso se um modo
+ * nao terminar (o analogico volta a valer depois disso). */
+/* Stamina: sem ela o jogo troca correr por andar a cada poucos quadros (o pouco que a stamina recupera andando basta para um
+ * passo de corrida, que a gasta de novo). Medido no Ryujinx com stamina 50: modo 3 e 2 alternando varias vezes por segundo, a
+ * animacao reiniciando em cada troca. Cansado (stamina < 12%, ou o que o jogo ainda deixa) o analogico anda direto ate a stamina
+ * voltar a 35%, e so entao volta a correr. A leitura e feita aqui, na thread do jogo, e o D2NXPad so le a bandeira. */
+static volatile LONG g_tired;
+static void tired_update(DWORD player)
+{
+    int st = unit_stat(player, 10), mx = unit_stat(player, 11), tired = g_tired;
+    if (!cfg.tired_walk || st < 0 || mx <= 0) { tired = 0; }
+    else if (tired) { if (st * 100 >= mx * 35) tired = 0; }
+    else if (st * 100 < mx * 12) tired = 1;
+    if (tired != g_tired) {
+        InterlockedExchange(&g_tired, tired);
+        dbg("stamina %d/%d: %s", st >> 8, mx >> 8, tired ? "cansado, so anda ate recuperar" : "recuperada, volta a correr");
+    }
+}
+#define ACT_LOCK_MS 200
+#define ACT_MAX_MS 2500
+static DWORD g_act_t;                  /* ultima acao nativa (ataque/habilidade/interagir) executada */
+static int mode_ready(DWORD m) { return m >= 1 && m <= 6; }
+static int action_in_progress(DWORD player, DWORD now)
+{
+    static DWORD nr_since;
+    DWORD m = rd32(player + U_MODE);
+    if (m == 0 || m == 17) return 1;                              /* morto: nenhuma ordem (a ordem de correr "ressuscitava" o modo do corpo) */
+    if (!cfg.act_wait) return 0;                                  /* [Movimento] EsperarAcao=0: comportamento antigo (teste A/B) */
+    if (mode_ready(m)) nr_since = 0;
+    else if (!nr_since) nr_since = now;
+    return (now - g_act_t < ACT_LOCK_MS) || (!mode_ready(m) && nr_since && now - nr_since < ACT_MAX_MS);
+}
+
 /* Um quadro do jogo, na thread do jogo: comandos nativos, movimento, mensagens e menu. */
 static void game_frame(void)
 {
     static int was_moving;
     static DWORD last_mv;
+    static DWORD tired_t;
     DWORD now = GetTickCount(), player;
     float px, py;
+    int acting;
     InterlockedIncrement(&g_frames);
     player = (g_ver && g_ver->player) ? rd32(g_client + g_ver->player) : 0;
     while (g_natq_tail != g_natq_head) {
         NatCmd c = g_natq[g_natq_tail % NATQ];
         InterlockedExchange(&g_natq_tail, g_natq_tail + 1);
-        if (player) do_command(player, c.a, c.b, (DWORD)c.cmd);
+        if (player) {
+            do_command(player, c.a, c.b, (DWORD)c.cmd);
+            if (c.cmd != NC_WALK && c.cmd != NC_RUN && c.cmd != NC_RUN_TO_UNIT) g_act_t = now;
+        }
         /* uma acao (interagir, correr ate o NPC, atacar) substitui o "pare aqui" de quando o analogico e solto:
          * mandado depois, ele cancelava a interacao no servidor (o menu do NPC ficava na tela, mas o TRADE fechava) */
         was_moving = 0;
     }
-    if (player && g_mv_active && !g_mv_busy && cfg.move_mode == 0) {      /* ordem antiga (ModoOrdem=0) */
+    if (player && now - tired_t >= 100) {                          /* cansaco do heroi (stamina) para o analogico: ver tired_update */
+        tired_t = now;
+        tired_update(player);
+    }
+    acting = player ? action_in_progress(player, now) : 0;
+    if (acting) {
+        /* nenhuma ordem de andar, nem o "pare aqui", ate o golpe terminar (was_moving fica: o "pare aqui" sai depois) */
+    } else if (player && g_mv_active && !g_mv_busy && cfg.move_mode == 0) {      /* ordem antiga (ModoOrdem=0) */
         if (now - last_mv >= MOVE_REPEAT_MS && unit_pos(player, 0, &px, &py)) {
             float tx = px + g_mv_wx * MOVE_REACH, ty = py + g_mv_wy * MOVE_REACH;
             do_command(player, (DWORD)(tx + 0.5f), (DWORD)(ty + 0.5f), g_mv_run ? NC_RUN : NC_WALK);
@@ -2666,9 +2793,10 @@ static void game_frame(void)
     if (player && g_nir < 0 && g_frames > 60) inv_layout_load();
     if (player && g_walk_log) {
         DWORD path = rd32(player + U_PATH);
-        lg("[WF] %lu pos %u.%05u,%u.%05u modo %lu gfx %lu dir %u alvo %u,%u mv %ld ordem %d,%d",
+        lg("[WF] %lu pos %u.%05u,%u.%05u modo %lu gfx %lu dir %u alvo %u,%u mv %ld ordem %d,%d vida %d mana %d stam %d",
            now, rd16(path + 2), rd16(path), rd16(path + 6), rd16(path + 4), rd32(player + U_MODE),
-           rd32(player + 0x44), rd8(path + 0x64), rd16(path + 0x10), rd16(path + 0x12), (long)g_mv_active, g_mv_tx, g_mv_ty);
+           rd32(player + 0x44), rd8(path + 0x64), rd16(path + 0x10), rd16(path + 0x12), (long)g_mv_active, g_mv_tx, g_mv_ty,
+           unit_stat(player, 6) >> 8, unit_stat(player, 8) >> 8, unit_stat(player, 10) >> 8);
         if (cfg.walktest > 1 || g_walk_log > 1) {
             char b[700]; int o = 0, k;
             for (k = 0x08; k < 0xC0; k += 4) o += snprintf(b + o, sizeof(b) - o, "%02X:%lX ", k, rd32(path + k));
@@ -3203,11 +3331,12 @@ static void mem_scan(DWORD v, int start)
 
 /* AutoTest Script=<arquivo>: roteiro de teste que aperta os botoes do controle pelo mesmo caminho do XInput
  * (para testar menus/loja/inventario no emulador). Um comando por linha, depois que o personagem entra:
- *   wait <ms> | pad <Botao> [ms] | stick <lx> <ly> <ms> | rstick <rx> <ry> <ms> | key <TECLA> | move <x> <y>
+ *   wait <ms> | pad <Botao> [ms] | stick <lx> <ly> <ms> [nb] | rstick <rx> <ry> <ms> [nb] | key <TECLA> | move <x> <y>
+ *   (nb = o roteiro segue com o analogico segurado: pad/mark/wait enquanto anda)
  *   click | rclick | npc [cls] (anda ate o NPC mais perto e aperta B) | waitpanel <id hex> <ms> | mark <texto> | log */
 static struct {
     char lines[200][80]; int n, i, on;
-    DWORD until, hold_until; int hold_b; float lx, ly, rx, ry; int npc, npc_cls, npc_type; DWORD npc_t0; int walk; float wx, wy; int hold_mask;
+    DWORD until, hold_until, stick_until; int hold_b; float lx, ly, rx, ry; int npc, npc_cls, npc_type; DWORD npc_t0; int walk; float wx, wy; int hold_mask;
 } g_scr;
 static void script_load(const char *rel)
 {
@@ -3251,7 +3380,7 @@ static void script_tick(void)
         if (now < g_scr.hold_until) { int k; for (k = 0; k < B_COUNT; k++) if (g_scr.hold_mask & (1 << k)) g_pad.down[k] = 1; }
         else { g_scr.hold_b = -1; g_scr.hold_mask = 0; }
     }
-    if (now < g_scr.hold_until && (g_scr.lx || g_scr.ly || g_scr.rx || g_scr.ry)) {
+    if (now < g_scr.stick_until && (g_scr.lx || g_scr.ly || g_scr.rx || g_scr.ry)) {
         g_pad.lx = g_scr.lx; g_pad.ly = g_scr.ly; g_pad.rx = g_scr.rx; g_pad.ry = g_scr.ry;
     } else { g_scr.lx = g_scr.ly = g_scr.rx = g_scr.ry = 0; }
     g_pad.connected = 1;
@@ -3287,9 +3416,9 @@ static void script_tick(void)
     if (now < g_scr.until) return;
     if (g_scr.i >= g_scr.n) { lg("[Script] fim"); g_scr.on = 0; return; }
     {
-        char c[80], a1[40] = "", a2[40] = "", a3[40] = "";
+        char c[80], a1[40] = "", a2[40] = "", a3[40] = "", a4[40] = "";
         const char *l = g_scr.lines[g_scr.i++];
-        sscanf(l, "%79s %39s %39s %39s", c, a1, a2, a3);
+        sscanf(l, "%79s %39s %39s %39s %39s", c, a1, a2, a3, a4);
         lg("[Script] > %s", l);
         g_scr.until = now + 50;
         if (!lstrcmpiA(c, "wait")) g_scr.until = now + atoi(a1);
@@ -3303,7 +3432,8 @@ static void script_tick(void)
             int ms = atoi(a3);
             if (c[0] == 's' || c[0] == 'S') { g_scr.lx = (float)atof(a1); g_scr.ly = (float)atof(a2); }
             else { g_scr.rx = (float)atof(a1); g_scr.ry = (float)atof(a2); }
-            g_scr.hold_until = now + ms; g_scr.until = now + ms + 100;
+            g_scr.stick_until = now + ms;
+            g_scr.until = a4[0] ? now + 50 : now + ms + 100;      /* 4o argumento (qualquer) = nao espera: o roteiro segue com o analogico segurado */
         } else if (!lstrcmpiA(c, "key")) { int vk = key_from_name(a1); if (vk) tap_key(vk, 0); g_scr.until = now + 300; }
         else if (!lstrcmpiA(c, "moveg")) { int ok = move_cursor_exact((float)atof(a1), (float)atof(a2)); script_log_state(ok ? "moveg ok" : "moveg ERRO"); g_scr.until = now + 200; }
         else if (!lstrcmpiA(c, "move")) { move_cursor((float)atof(a1), (float)atof(a2)); g_scr.until = now + 200; }
@@ -3365,6 +3495,42 @@ static void script_tick(void)
                     }
                 }
             }
+        }
+        else if (!lstrcmpiA(c, "stats")) {   /* lista todos os atributos do heroi: camada:id=valor (diagnostico) */
+            DWORD st = g_player ? rd32(g_player + 0x5C) : 0, arr = st ? rd32(st + 0x48) : 0, n = st ? rd16(st + 0x4C) : 0, k;
+            char b[900]; int o = 0;
+            lg("[Stats] lista %08lX vetor %08lX contagem %lu", st, arr, n);
+            for (k = 0; arr && k < n && k < 120 && readable(arr, n * 8); k++) {
+                o += snprintf(b + o, sizeof(b) - o, "%u:%u=%ld ", rd16(arr + k * 8), rd16(arr + k * 8 + 2), (long)rd32(arr + k * 8 + 4));
+                if (o > 780) { lg("[Stats] %s", b); o = 0; }
+            }
+            if (o) lg("[Stats] %s", b);
+            arr = st ? rd32(st + 0x24) : 0; n = st ? rd16(st + 0x28) : 0; o = 0;          /* lista base (so os atributos proprios) */
+            lg("[Stats] base: vetor %08lX contagem %lu", arr, n);
+            for (k = 0; arr && k < n && k < 120 && readable(arr, n * 8); k++)
+                o += snprintf(b + o, sizeof(b) - o, "%u:%u=%ld ", rd16(arr + k * 8), rd16(arr + k * 8 + 2), (long)rd32(arr + k * 8 + 4));
+            if (o) lg("[Stats] base %s", b);
+        }
+        else if (!lstrcmpiA(c, "storm")) {   /* storm <arquivo>: tamanho do arquivo como a Storm do jogo o enxerga (solto na pasta ou no MPQ) */
+            typedef BOOL (WINAPI *SOpen_t)(const char *, HANDLE *);
+            typedef DWORD (WINAPI *SSize_t)(HANDLE, DWORD *);
+            typedef BOOL (WINAPI *SClose_t)(HANDLE);
+            HMODULE st = GetModuleHandleA("Storm.dll");
+            SOpen_t so = (SOpen_t)(void *)GetProcAddress(st, (LPCSTR)267);
+            SSize_t ss = (SSize_t)(void *)GetProcAddress(st, (LPCSTR)265);
+            SClose_t sc = (SClose_t)(void *)GetProcAddress(st, (LPCSTR)253);
+            HANDLE fh = 0;
+            typedef BOOL (WINAPI *SRead_t)(HANDLE, void *, DWORD, DWORD *, void *);
+            SRead_t sr = (SRead_t)(void *)GetProcAddress(st, (LPCSTR)269);
+            if (so && ss && sc && sr && so(a1, &fh)) {
+                DWORD size = ss(fh, NULL), got = 0, i, crc = 0xFFFFFFFFu;
+                BYTE *buf = malloc(size + 16);
+                int k;
+                if (buf && sr(fh, buf, size, &got, NULL))
+                    for (i = 0; i < got; i++) { crc ^= buf[i]; for (k = 0; k < 8; k++) crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1)); }
+                lg("[Storm] %s: %lu bytes lidos %lu crc %08lx", a1, size, got, (unsigned long)~crc);
+                free(buf); sc(fh);
+            } else lg("[Storm] %s: nao abriu", a1);
         }
         else if (!lstrcmpiA(c, "wflog")) InterlockedExchange(&g_walk_log, atoi(a1));
         else if (!lstrcmpiA(c, "walkto")) { g_scr.walk = 1; g_scr.wx = (float)atof(a1); g_scr.wy = (float)atof(a2); g_scr.npc_t0 = now; }
@@ -3904,7 +4070,7 @@ static void tick(float dt)
             wx = sx / 16.0f + sy / 8.0f; wy = sy / 8.0f - sx / 16.0f; wl = sqrtf(wx * wx + wy * wy);
             g_mv_wx = wx / wl; g_mv_wy = wy / wl;                  /* tela isometrica -> mundo */
             /* andar/correr com histerese: perto do limite a passada nao fica alternando */
-            InterlockedExchange(&g_mv_run, g_mv_run ? inten >= cfg.run_at - 0.10f : inten >= cfg.run_at);
+            InterlockedExchange(&g_mv_run, !g_tired && (g_mv_run ? inten >= cfg.run_at - 0.10f : inten >= cfg.run_at));
             InterlockedExchange(&g_mv_active, 1);
         } else {
             InterlockedExchange(&g_mv_active, 0);

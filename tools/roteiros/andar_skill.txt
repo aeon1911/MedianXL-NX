@@ -1,0 +1,30 @@
+# Andar com o analogico e soltar a habilidade da direita (X) enquanto anda. Evidencia: modo do heroi por quadro
+# ([WF] modo 2/3 = andando/correndo, 7-16 = ataque/habilidade). Tudo pelos botoes do controle.
+# O herois de teste (nivel 3) morre uns 15 s depois de entrar no Blood Moor: a parte medida cabe em ~12 s.
+wait 11000
+mark cidade
+walkto 4340 5444
+walkto 4480 5446
+walkto 4540 5446
+mark campo
+wflog 1
+mark anda_leste
+stick 1.0 0.0 2600 nb
+wait 1000
+mark toque_100ms_andando
+pad X 100
+wait 1600
+mark anda_oeste
+stick -1.0 0.0 2600 nb
+wait 1000
+mark toque_100ms_andando_2
+pad X 100
+wait 1600
+mark anda_leste_2
+stick 1.0 0.0 2600 nb
+wait 800
+mark segurado_700ms_andando
+pad X 700
+wait 2000
+wflog 0
+mark fim

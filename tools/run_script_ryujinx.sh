@@ -21,6 +21,8 @@ if pgrep -f "^/tmp/ryujinx-d2" >/dev/null; then echo "ERRO: outro Ryujinx de tes
 [ -d "$PARK" ] && { echo "ERRO: $PARK existe (saves de um teste interrompido): devolva para $MXL antes"; exit 1; }
 python3 tools/assemble_sd_tree.py >/dev/null 2>&1 || { echo "ERRO: montagem do SD falhou"; exit 1; }
 rm -rf "$SHOTS"; mkdir -p "$SHOTS"
+# PRE_RUN="comando": roda depois da montagem do SD de teste (ex.: ligar o verbose do runtime)
+[ -n "$PRE_RUN" ] && eval "$PRE_RUN"
 if [ -n "$SAVES" ]; then
     [ -d "$MXL" ] && mv "$MXL" "$PARK"
     mkdir -p "$MXL"; cp -a "$SAVES/." "$MXL/"
@@ -29,6 +31,24 @@ cp "$SCRIPT" "$D2/d2nx/roteiro.txt"
 # Debug=1: os criterios leem mensagens dbg() (o INI do pacote vai com Debug=0)
 sed -i '/^Script=/d; /^AutoCreate=/d; /^MenuTest=/d; /^WalkTest=/d; s/^Debug=.*/Debug=1/; s/^AutoJoin=.*/AutoJoin=1/; s/^AutoWalk=.*/AutoWalk=0/' "$INI"
 sed -i "s/^AutoJoin=1/AutoJoin=1\nScript=roteiro.txt/" "$INI"
+# INI_SET="Secao.Chave=valor;Secao.Chave=valor": ajusta chaves do d2nxpad.ini de teste (teste A/B)
+if [ -n "$INI_SET" ]; then
+python3 - "$INI" "$INI_SET" <<'PY'
+import re, sys
+path, sets = sys.argv[1], sys.argv[2]
+txt = open(path, encoding="utf-8", errors="surrogateescape").read()
+for item in sets.split(";"):
+    if not item.strip(): continue
+    sk, v = item.split("=", 1); sec, key = sk.split(".", 1)
+    m = re.search(r"^\[%s\][^\[]*" % re.escape(sec), txt, re.M)
+    if not m: txt += "\n[%s]\n%s=%s\n" % (sec, key, v); continue
+    body = m.group(0)
+    if re.search(r"^%s=" % re.escape(key), body, re.M): nb = re.sub(r"^%s=.*$" % re.escape(key), "%s=%s" % (key, v), body, flags=re.M)
+    else: nb = body.rstrip("\n") + "\n%s=%s\n" % (key, v)
+    txt = txt[:m.start()] + nb + txt[m.end():]
+open(path, "w", encoding="utf-8", errors="surrogateescape").write(txt)
+PY
+fi
 echo "sdmc:/switch/wine/drive_c/DiabloII/Game.exe" > "$WINE/run-next.txt"
 rm -f "$ROOT/ryu.log" "$D2/D2Autorun.log" "$D2/d2nx/d2nxpad.log" "$WINE"/logs/*
 ln -sf "$(which ryujinx)" /tmp/ryujinx-d2

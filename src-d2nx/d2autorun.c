@@ -22,7 +22,7 @@
 #include <string.h>
 #include "hook.h"
 
-#define AUTORUN_VERSION "0.4.4"
+#define AUTORUN_VERSION "0.4.5"
 
 static FILE *g_log;
 static CRITICAL_SECTION g_log_cs;
@@ -886,7 +886,116 @@ static void ensure_save_dir(void)
  * Medido no Ryujinx (28/10/2026, cidade, sem limite de FPS, 2 rodadas por variante): luz alta ou normal = 17,5-18,0 ms por
  * quadro, luz baixa = 8,6 ms (o dobro de FPS); as sombras translucidas nao mudaram o custo de CPU. [Desempenho] QualidadeLuz
  * (padrao 0 = baixa) e SombrasTranslucidas (padrao -1 = como o jogador deixou) sao aplicados a cada boot; -1 nao mexe.
- * Se o arquivo ainda nao existe (1a vez), o Median XL o cria com o padrao e o ajuste vale a partir do boot seguinte. */
+ * Se o arquivo ainda nao existe (1a vez), o D2Autorun o cria com o padrao do Median XL ja com o perfil aplicado (antes, o
+ * ajuste so valia do 2o boot em diante: o log do console de 29/10 mostrou a 1a partida inteira com luz alta). */
+/* preferences.json padrao do Median XL 2.14.6 (o que ele grava num console novo; so legacy_light_quality muda, pelo [Desempenho]).
+ * Criado quando o arquivo ainda nao existe, para o perfil de desempenho valer ja no 1o boot. */
+static const char g_default_prefs[] =
+    "{\n"
+    "    \"display_arealvl\": 1,\n"
+    "    \"display_automap_party\": 1,\n"
+    "    \"display_buy_window\": 1,\n"
+    "    \"display_colorblind_mode\": 0,\n"
+    "    \"display_dungeon_timer\": 1,\n"
+    "    \"display_gamename\": 1,\n"
+    "    \"display_gamepassword\": 1,\n"
+    "    \"display_gameping\": 0,\n"
+    "    \"display_gametime\": 0,\n"
+    "    \"display_gfx_devtools\": 0,\n"
+    "    \"display_gui_theme\": -1,\n"
+    "    \"display_hpvalue\": 0,\n"
+    "    \"display_ilvl\": 0,\n"
+    "    \"display_manavalue\": 0,\n"
+    "    \"display_no_loot_filter_in_town\": 0,\n"
+    "    \"display_notif_textonly\": 0,\n"
+    "    \"display_show_loot_toggle\": 0,\n"
+    "    \"display_trailer_mode\": 0,\n"
+    "    \"filter_gamble\": [],\n"
+    "    \"hotkey_always_run\": -1,\n"
+    "    \"hotkey_automap\": 9,\n"
+    "    \"hotkey_automap_fade\": -1,\n"
+    "    \"hotkey_belt1\": 49,\n"
+    "    \"hotkey_belt2\": 50,\n"
+    "    \"hotkey_belt3\": 51,\n"
+    "    \"hotkey_belt4\": 52,\n"
+    "    \"hotkey_chat\": 13,\n"
+    "    \"hotkey_clear\": 32,\n"
+    "    \"hotkey_clearmsg\": 78,\n"
+    "    \"hotkey_default_lf\": -1,\n"
+    "    \"hotkey_esc_menu\": 27,\n"
+    "    \"hotkey_favorite_lf\": -1,\n"
+    "    \"hotkey_inv\": 73,\n"
+    "    \"hotkey_merc\": 79,\n"
+    "    \"hotkey_minmap_pos\": -1,\n"
+    "    \"hotkey_msglog\": 77,\n"
+    "    \"hotkey_nopickup\": 88,\n"
+    "    \"hotkey_party\": 80,\n"
+    "    \"hotkey_quests\": 81,\n"
+    "    \"hotkey_quickcast1\": 4,\n"
+    "    \"hotkey_quickcast2\": 5,\n"
+    "    \"hotkey_quickcast3\": 6,\n"
+    "    \"hotkey_quickcast4\": -1,\n"
+    "    \"hotkey_revealmap\": 82,\n"
+    "    \"hotkey_run\": 17,\n"
+    "    \"hotkey_screenshot\": 44,\n"
+    "    \"hotkey_showbelt\": 192,\n"
+    "    \"hotkey_showitems\": 18,\n"
+    "    \"hotkey_showportrait\": 90,\n"
+    "    \"hotkey_skill1\": 112,\n"
+    "    \"hotkey_skill10\": 121,\n"
+    "    \"hotkey_skill11\": 122,\n"
+    "    \"hotkey_skill12\": 123,\n"
+    "    \"hotkey_skill2\": 113,\n"
+    "    \"hotkey_skill3\": 114,\n"
+    "    \"hotkey_skill4\": 115,\n"
+    "    \"hotkey_skill5\": 116,\n"
+    "    \"hotkey_skill6\": 117,\n"
+    "    \"hotkey_skill7\": 118,\n"
+    "    \"hotkey_skill8\": 119,\n"
+    "    \"hotkey_skill9\": 120,\n"
+    "    \"hotkey_skillnext\": 15,\n"
+    "    \"hotkey_skillprev\": 14,\n"
+    "    \"hotkey_skillselect\": 83,\n"
+    "    \"hotkey_skilltree\": 84,\n"
+    "    \"hotkey_speech_1\": -1,\n"
+    "    \"hotkey_speech_2\": -1,\n"
+    "    \"hotkey_speech_3\": -1,\n"
+    "    \"hotkey_speech_4\": -1,\n"
+    "    \"hotkey_speech_5\": -1,\n"
+    "    \"hotkey_speech_6\": -1,\n"
+    "    \"hotkey_speech_7\": -1,\n"
+    "    \"hotkey_speech_8\": -1,\n"
+    "    \"hotkey_standstill\": 16,\n"
+    "    \"hotkey_statscreen\": 65,\n"
+    "    \"hotkey_swapweap\": 87,\n"
+    "    \"hotkey_toggle_minimap\": -1,\n"
+    "    \"hotkey_transmute\": 67,\n"
+    "    \"legacy_automap_left\": 1,\n"
+    "    \"legacy_automap_party\": 1,\n"
+    "    \"legacy_automap_party_names\": 1,\n"
+    "    \"legacy_automapfade\": 0,\n"
+    "    \"legacy_automapmode\": 0,\n"
+    "    \"legacy_blended_shadows\": 1,\n"
+    "    \"legacy_contrast\": 50,\n"
+    "    \"legacy_diff_level\": 0,\n"
+    "    \"legacy_gamma\": 195,\n"
+    "    \"legacy_help_menu\": 1,\n"
+    "    \"legacy_light_quality\": 2,\n"
+    "    \"legacy_lvl_rest\": 95,\n"
+    "    \"legacy_master_volume\": 100,\n"
+    "    \"legacy_max_player\": 8,\n"
+    "    \"legacy_mini_panel\": 1,\n"
+    "    \"legacy_music_volume\": 50,\n"
+    "    \"legacy_npc_speech\": 2,\n"
+    "    \"legacy_options_music\": 1,\n"
+    "    \"legacy_perspective\": 0,\n"
+    "    \"notif_buffs\": 1,\n"
+    "    \"notif_gold\": 1,\n"
+    "    \"notif_levelup\": 1,\n"
+    "    \"notif_newskill\": 1,\n"
+    "    \"notif_newstat\": 1,\n"
+    "    \"notif_realmwhispers\": 1\n"
+    "}\n";
 static int json_set_int(char *b, size_t *len, size_t cap, const char *key, int value)
 {
     char pat[64], num[16];
@@ -923,23 +1032,30 @@ static void apply_game_prefs(void)
     DWORD size, got = 0, put = 0;
     size_t len;
     unsigned i;
-    int changed = 0;
+    int changed = 0, created;
     if (!GetEnvironmentVariableA("APPDATA", path, sizeof(path) - 40)) return;
     lstrcatA(path, "\\MedianXL\\save\\preferences.json");
     h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE) { lg("preferences.json ainda nao existe: opcoes de video no padrao do jogo neste boot"); return; }
-    size = GetFileSize(h, NULL);
-    if (size == INVALID_FILE_SIZE || size > (1u << 20) || !(b = malloc((size_t)size + 64))) { CloseHandle(h); return; }
-    if (!ReadFile(h, b, size, &got, NULL) || got != size) { CloseHandle(h); free(b); return; }
-    CloseHandle(h);
-    b[size] = 0;
+    if (h == INVALID_HANDLE_VALUE) {                          /* 1o boot: parte do padrao do jogo, ja com o perfil aplicado */
+        size = (DWORD)sizeof(g_default_prefs) - 1;
+        if (!(b = malloc((size_t)size + 64))) return;
+        memcpy(b, g_default_prefs, size + 1);
+        lg("preferences.json ainda nao existe: criando com o padrao do jogo e o perfil de desempenho");
+    } else {
+        size = GetFileSize(h, NULL);
+        if (size == INVALID_FILE_SIZE || size > (1u << 20) || !(b = malloc((size_t)size + 64))) { CloseHandle(h); return; }
+        if (!ReadFile(h, b, size, &got, NULL) || got != size) { CloseHandle(h); free(b); return; }
+        CloseHandle(h);
+        b[size] = 0;
+    }
     len = size;
+    created = h == INVALID_HANDLE_VALUE;
     for (i = 0; i < sizeof(opts) / sizeof(opts[0]); i++) {
         int want = cfg_int("Desempenho", opts[i].ini, opts[i].def);
         if (want < 0 || want > 9) continue;
         if (json_set_int(b, &len, (size_t)size + 64, opts[i].key, want)) { changed++; lg("preferences.json: %s = %d (perfil de desempenho)", opts[i].key, want); }
     }
-    if (changed) {                                           /* grava num temporario e troca: uma queda no meio nao deixa o JSON pela metade */
+    if (changed || created) {                                /* grava num temporario e troca: uma queda no meio nao deixa o JSON pela metade */
         snprintf(tmp, sizeof(tmp), "%s.d2nx", path);
         h = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (h != INVALID_HANDLE_VALUE) {

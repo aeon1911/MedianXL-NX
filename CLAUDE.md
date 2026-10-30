@@ -18,8 +18,10 @@ Repositório remoto: https://github.com/aeon1911/MedianXL-NX (branch `main`). Fa
 - Loader do Σ: `Game.exe` chama Fog.dll ordinal 10082 → carrega `D2Sigma.dll` na thread principal (não carregar pelo worker).
 - `Fog.dll` do Σ tem bit `IMAGE_FILE_RELOCS_STRIPPED` errado → `tools/fix_fog_characteristics.py` (0x210f→0x210e).
 - Vídeo: D2GL (`glide3x.dll`) com `-3dfx`; `Game.args.txt` = `-3dfx -direct -log`.
-- Mods de gameplay (XP 2x, runas 2x, únicos/raros 1.5x) = tabelas `.bin` soltas em `data/global/excel/`
-  geradas por `tools/patch_gameplay.py` a partir de originais em `build/gameplay_orig/` (usa modo `-direct`).
+- Mods de gameplay (XP 2x, runas 2x, únicos/raros 1.5x, Full Rejuvenation em todos os vendedores) = tabelas `.bin` geradas por
+  `tools/patch_gameplay.py` a partir de originais em `build/gameplay_orig/` e gravadas DENTRO do `medianxl-data.mpq` por
+  `build/bin/mpq_overlay` (o D2Sigma lê essas tabelas pela Storm, direto do MPQ; arquivos soltos em `data/global/excel/` são ignorados,
+  exceto `charstats.bin`, que o Fog carrega). O menu de cheats (ZL+−) só escreve arquivos soltos: não aplica em tempo real.
 
 ## Fluxo de build / teste / pacote (rodar na raiz do checkout principal)
 - Do zero (usuario final): `./setup.sh "<pasta do Diablo II>" [--zip]` → `tools/build_all.sh` (build.sh,
@@ -126,3 +128,15 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
 - Hook especulativo em `Fog.dll +1B195` causou Halt #1696 → removido. Único patch seguro no Fog é o +11690.
 - Histórico completo das conversas do Antigravity: `~/.gemini/antigravity/brain/39c33ae5-c454-4148-b20c-a74b47ca24b1/.system_generated/logs/transcript.jsonl`
   (conversa "Porting Median XL To Switch") e `.../cbd64ada-128d-4258-b05d-8b03d72e6c17/...` (tentativa anterior com D2SE).
+
+## 29/10/2026 — 1º boot com luz baixa, andar + habilidade, barra de baixo, vendedores (detalhes: D2PAD_CHANGES N)
+- Log do console (cartão novo): a 1ª partida rodou com luz alta porque o `preferences.json` ainda não existia; o D2Autorun agora o cria com o padrão e luz 0.
+  As travadas de ~1 s coincidem com leitura do SD (carga de área); o GL é ~16 ms de ~22 ms por quadro no console (glBufferSubData 4,2 ms/chamada).
+- Habilidade "gasta mana e não sai" = a ordem de andar cortava a animação: o movimento espera o modo de ação terminar (`EsperarAcao`). Com pouca stamina o
+  jogo alternava andar/correr a cada poucos quadros: `AndarCansado=1` anda direto até recuperar.
+- Direcional chega à barra de baixo (mini painel, habilidades) com painel aberto; ZL no painel = HUD (`[Painel] ZL=HUD`).
+- ACHADO: tabelas do Median XL só valem dentro do MPQ; os multiplicadores de XP/runas/únicos/raros nunca tinham efeito até esta data (agora entram via `mpq_overlay`).
+- O herói de teste (nível 3) morre em segundos no Blood Moor: rodada com `vida -1`/modos 0/17 no `[WF]` não vale. Roteiros em `tools/roteiros/`
+  (`run_script_ryujinx.sh` aceita `INI_SET="Secao.Chave=valor"` e `PRE_RUN`). Os logs do console saem pelo MTP do DBI
+  (`/run/user/1000/gvfs/mtp:host=.../1: Cartão SD/...`), inclusive o `autorun_runtime.log`.
+

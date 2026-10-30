@@ -1,0 +1,8 @@
+# Diagnostico: tamanho dos arquivos como a Storm do jogo os enxerga (solto em data\global\excel ou no MPQ)
+wait 12000
+storm DATA\GLOBAL\EXCEL\npcstores.bin
+storm DATA\GLOBAL\EXCEL\experience_sp.bin
+storm DATA\GLOBAL\EXCEL\itemratio_sp.bin
+storm DATA\GLOBAL\EXCEL\misc.bin
+wait 300
+mark fim

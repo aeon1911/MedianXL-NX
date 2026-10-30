@@ -1,0 +1,5 @@
+# Diagnostico: lista os atributos do heroi (id:valor) para achar vida/mana/stamina
+wait 12000
+stats
+wait 500
+mark fim
