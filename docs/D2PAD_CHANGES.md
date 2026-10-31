@@ -385,3 +385,20 @@ nova poção roxa (classe 1236 = índice 72 do `misc.bin` = `rvl`). Os outros 17
 **Ferramentas e roteiros**: `tools/roteiros/{andar_skill,barra_hud,vendedores,stats,storm}.txt`; `run_script_ryujinx.sh` ganhou `INI_SET="Secao.Chave=valor;..."` (A/B)
 e `PRE_RUN="comando"`; comandos de roteiro novos: `stick ... nb` (analógico segurado sem bloquear o roteiro), `stats` (atributos do herói), `storm <arquivo>` (tamanho e CRC como a Storm
 do jogo enxerga); `[WF]` agora traz `vida mana stam` e `[WO]` cada ordem de movimento; `tools/mpq_overlay`.
+
+### O. 30/10/2026 — log do console com a luz baixa (pacote 0.4.5 / 1.2.0, cartão novo) e ferramentas de análise
+Log recebido pelo MTP do DBI (3 min de partida; personagem novo "Valen", Rogue Encampment + Blood Moor; copiado para `build/logs-console/20261030-console/`, não versionado).
+- **Confirmado no console**: o `preferences.json` nasceu no 1º boot com `legacy_light_quality = 0`; o editor de nome (R3) criou o personagem; as compras na loja funcionaram.
+  FPS fora de carga: 56 (min 1) e 58 (min 2); cidade 56-60, Blood Moor 55-58. Thread principal (`4w`) em 20-48% de um núcleo, 0,5-0,9 núcleo no total; o GL fica em ~16,3-16,4 ms
+  por quadro em todos os intervalos, ou seja, preso no vsync (a espera dentro de `glClear`/`glBufferSubData` não é custo de CPU). Sem esgotamento de código (`code_mb` 19/48) nem de heap.
+- **O que sobra**: congelamentos de 1,1 s (entrada na partida) e 1,5 s (entrada no Blood Moor), picos isolados de 380 e 485 ms e, por ~15 s depois de entrar numa área nova, quadros
+  de 50-130 ms (até 32 quadros > 33 ms por janela de 5 s). Nos 15 intervalos de 10 s após a cidade, `sd_ms` do runtime × quadros > 33 ms tem r = 0,78 (intervalos com `sd_ms` ≥ 200:
+  6-38 quadros lentos; com `sd_ms` < 100: 1-13, e 20 no intervalo logo após a carga). Cada leitura do SD tem ~120 KB e leva ~4 ms (31 MB/s; no boot 55 MB/s). O congelamento de 1,5 s
+  não cabe só no SD (`sd_ms` 346 em 10 s); hipótese não medida: CPU de criação de sala/mapa no tradutor.
+- **Boot**: ~27 s do início do D2Autorun até a janela do jogo (thread da Storm, `24w`, em 64-78% de um núcleo: leitura/decodificação dos MPQs), mais ~19 s da confirmação do nome até a 1ª janela de FPS na cidade.
+  Na tela de personagem há ~600 mil syscalls (nº 0x34 e 0x14ca) em 10 s contra ~16 mil por 10 s em jogo: causa não investigada.
+- **O que não se pode mudar daqui**: o cache de SD (128 KB × 8 por arquivo) está no `wine-nx-runtime.nro` do AUTORUN; não há toolchain devkitPro/libnx nesta máquina (só a imagem de DLLs de
+  Windows). Os knobs do Box64 já foram esgotados (seção L/M e `docs/DESEMPENHO.md`).
+- **Falta medir**: combate pesado com muitos monstros e magias azuis (o log não tem essa cena); andar + habilidade, barra de baixo e Full Rejuvenation no console.
+- **Ferramentas**: `tools/correlacionar_runtime_console.py <pasta de logs>` cruza, a cada 10 s, o `autorun_runtime.log` (GL por quadro, `sd_ms`, `read_ms`, invalidações, núcleos, threads) com as
+  janelas `[PERF]` do `d2nxpad.log`; `tools/coletar_logs_console.py` agora o chama no fim. A hora do boot vem da 1ª linha do `D2Autorun.log` (o relógio do runtime começa no boot).

@@ -1,8 +1,66 @@
-# HANDOFF — retomar o projeto (troca de distro 28/10/2026; atualizado em 29/10)
+# HANDOFF — retomar o projeto (troca de distro 28/10/2026; atualizado em 31/10)
 
 Ponto de partida: `origin/main` (https://github.com/aeon1911/MedianXL-NX). Leia antes `CLAUDE.md`, `AGENTS.md`,
 `RULES.md` (regras permanentes) e `docs/D2PAD_CHANGES.md` (seções E a N = o que foi feito e medido).
 `docs/STATUS.md`, `ARQUITETURA.md`, `CONTROLES.md`, `PROGRESSO.md` descrevem abordagens antigas: nao usar como verdade.
+
+## COMECE AQUI (31/10/2026) — leia esta seção antes de qualquer outra
+**Missão:** port do Median XL Σ 2.14.6 (Diablo II LoD 1.13c) para o Switch Lite (Atmosphère), rodando no AUTORUN / Wine-NX, com
+controle pelo D2NXPad. Falar com o usuário em português. Commit e push só quando ele pedir.
+
+**Onde está o código**
+- Trabalho atual: branch `perf/stutter-console-28out`, 3 commits à frente do `origin/main` (`cd6f061` luz baixa + telemetria, `0a85427`
+  andar+habilidade/barra de baixo/vendedores/tabelas no MPQ, `df5037e` ferramentas de análise dos logs). **Não foi enviada ao GitHub.**
+  Vive no worktree `.claude/worktrees/perf-console` (com `build` e `dist` ligados por symlink à pasta principal). Se o worktree sumir:
+  `git worktree add .claude/worktrees/perf-console perf/stutter-console-28out` e refazer os dois `ln -s`.
+- A pasta principal está no `main` local antigo (história reescrita, 16 à frente / 22 atrás do `origin/main`) e com edições não commitadas
+  velhas (DLLs, `d2nxpad.c`, `CLAUDE.md`). **Não trabalhe nela nem use o `sd-card/` dela**; o conteúdo útil está no branch acima.
+
+**O pacote para testar no console** (é o mais atual; nada mudou no jogo depois dele, só ferramentas e docs)
+- `dist/d2-medianxl-autorun-switch-2.14.6-final.zip`, 2,27 GB, 278 arquivos, 29/10 21:07. SHA256
+  `48a41e59e5c7e54e35adcb8c3e9f18b26a6f1b188291b6c61a6eabc88b3f12dd` (também em `…zip.sha256`). D2NXPad 1.2.0 + D2Autorun 0.4.5.
+- Tem de levar `switch/d2-autorun/` (o `.nro`) e o `switch/wine/` completo; o `medianxl-data.mpq` (548 MB) mudou, então o usuário recopia tudo.
+  Esse pacote já está no cartão do usuário (o log de 30/10 mostra 0.4.5 / 1.2.0).
+- Para gerar outro: `python3 tools/assemble_sd_tree.py` (monta `dist/sd-card/` e a árvore de teste do Ryujinx) e `python3 tools/package_release.py`
+  (o nome do zip é fixo e sobrescreve; renomeie o anterior se quiser guardá-lo). Em 31/10 só existe o `-final.zip` em `dist/`
+  (os zips antigos e `dist/sd-card/` foram removidos de lá; `assemble_sd_tree.py` recria a pasta).
+
+**O que já está confirmado no console (log de 30/10, `docs/D2PAD_CHANGES.md` O)**
+- Boot até o jogo, criação de personagem com o editor de nome (R3), lojas, `preferences.json` criado no 1º boot com luz baixa.
+- Luz baixa: 55-60 FPS fora de carga em cidade + Blood Moor, thread principal em 20-48% de um núcleo, GL preso no vsync (~16,4 ms/quadro).
+
+**O que NÃO foi visto no console ainda (pedir ao usuário)**
+1. Combate pesado (muitos monstros, magias azuis) com luz baixa: era a queixa original e o log de 30/10 não tem essa cena.
+2. Andar + soltar habilidade (Bárbaro "deslizando"): corrigido e medido só no Ryujinx.
+3. Barra de baixo pelo direcional (com painel aberto, ZL = HUD): validada só no Ryujinx.
+4. Full Rejuvenation nos vendedores: só o Akara foi verificado (Ryujinx).
+
+**Como coletar os logs do console** (o usuário liga o DBI por MTP; os logs são sobrescritos a cada partida)
+`python3 tools/coletar_logs_console.py "$(ls -d /run/user/1000/gvfs/mtp*)/1: Cartão SD"` copia para `build/logs-console/<data>/` e imprime o
+resumo de FPS (`analisar_perf_log.py`) e o cruzamento runtime × pad (`correlacionar_runtime_console.py`: `sd_ms` do SD, GL por quadro, núcleos).
+
+**Problemas abertos, em ordem de valor**
+1. Travadinhas de 50-130 ms por ~15 s ao entrar em área nova e congelamentos de 1,1-1,5 s na troca de área: acompanham a leitura do SD
+   (r = 0,78 entre `sd_ms` e quadros > 33 ms; ~120 KB por leitura a 31-55 MB/s). **Sem alavanca no projeto:** o cache de SD (128 KB × 8 por arquivo)
+   é fixo no `wine-nx-runtime.nro` do AUTORUN e não há toolchain devkitPro/libnx aqui (só a imagem de DLLs de Windows). Box64 já esgotado
+   (`docs/DESEMPENHO.md`). Hipótese de hardware não medida: cartão SD mais rápido.
+2. Se o combate pesado ainda ficar abaixo de ~45 FPS: experimento `d2gl.frame_latency=2` (linha comentada no `sd-card/.../d2nx/d2nx.ini`;
+   só mensurável no console, custa 1 quadro de atraso) ou sessão com `profile=1` no `Game.wine-nx.txt` (derruba o Ryujinx; só no console).
+3. Não investigados (têm números, falta a causa): ~600 mil syscalls (nº 0x34 e 0x14ca) em 10 s na tela de personagem, ~19 s da confirmação
+   do nome até a 1ª janela de FPS na cidade, e as travadas de 0,6-5,6 s com o inventário aberto em Stony Field (28/10).
+4. Menores: o menu de cheats (ZL+−) não aplica em tempo real; ouro inicial indisponível; o `[RT]` do `d2nxpad.log` não lê o runtime no console
+   (erro 2): o `autorun_runtime.log` vem pelo MTP.
+
+**Regras que não se negociam** (texto completo em `AGENTS.md` e `RULES.md`)
+- Nada vai ao console sem validação no Ryujinx; proibido chutar causa (evidência de log/medição). "Funcionou" exige o herói mudando de posição.
+- Movimento e ações pela camada nativa (rotina de comando do D2Client); proibido mouse/cursor para andar ou atacar.
+- Boot rápido; nenhum arquivo da Blizzard no git (DLLs e zips também ficam de fora; só as fontes).
+
+**Documentos: o que é verdade**
+- Verdade: este arquivo, `CLAUDE.md`, `AGENTS.md`, `RULES.md`, `docs/D2PAD_CHANGES.md` (seções E a O) e `docs/DESEMPENHO.md`.
+- Abordagens antigas, não usar: `docs/STATUS.md`, `ARQUITETURA.md`, `CONTROLES.md`, `PROGRESSO.md` (este último superestima).
+- Memória do Claude Code (fora do repositório): `~/.claude/projects/-mnt-STEAM-Projetos-DIABLO-2-LOD-SWITCH-PORT/memory/`. O essencial
+  dela já está neste arquivo e em `CLAUDE.md`; outra IA não precisa dela.
 
 ## Estado
 - Funciona no console (Switch Lite, portátil): boot, jogo, andar/atacar nativos, habilidades, seletor de habilidades
@@ -12,9 +70,9 @@ Ponto de partida: `origin/main` (https://github.com/aeon1911/MedianXL-NX). Leia 
   passou na 2ª), seletor 10/10, menus 16/16, criação 2/2, com o D2NXPad 1.1.1+telemetria. O 1.1.2 do pacote só muda o número da versão e o
   texto do INI padrão; nele foram repetidos o seletor (10/10) e a rodada de fluidez (60 FPS, `[THR]`/`[RT]` no log).
 - Pacote: `dist/d2-medianxl-autorun-switch-2.14.6-final.zip` (29/10, D2NXPad 1.2.0 + D2Autorun 0.4.5; SHA256
-  48a41e59e5c7e54e35adcb8c3e9f18b26a6f1b188291b6c61a6eabc88b3f12dd). Anteriores: `-final-28out.zip` (luz baixa + telemetria, SHA
-  f1564cbdd9f9e0cca790b0ce37de17e14c352eb2f700a5c409a711c813ed4382; gerou o log de 29/10), `-final-27out.zip` (o que gerou o log de 28/10),
-  `-final-seletor.zip`, `-final-24out.zip`. DLLs e zips NAO vao para o git (so as fontes).
+  48a41e59e5c7e54e35adcb8c3e9f18b26a6f1b188291b6c61a6eabc88b3f12dd). Anteriores (históricos; em 31/10 já não estão em `dist/`):
+  `-final-28out.zip` (luz baixa + telemetria, SHA f1564cbdd9f9e0cca790b0ce37de17e14c352eb2f700a5c409a711c813ed4382; gerou o log de 29/10),
+  `-final-27out.zip` (gerou o log de 28/10), `-final-seletor.zip`, `-final-24out.zip`. DLLs e zips NAO vao para o git (so as fontes).
 
 ## 29/10: o que mudou depois do log do console (detalhes e números em `docs/D2PAD_CHANGES.md` N)
 - 1º boot: o D2Autorun cria o `preferences.json` com luz baixa (antes a 1ª partida inteira rodava com luz alta).

@@ -1,6 +1,10 @@
 @AGENTS.md
 @RULES.md
 
+> **Retomando o projeto? Comece por `docs/HANDOFF.md`, seção "COMECE AQUI"**: onde está o código (branch
+> `perf/stutter-console-28out`, não enviado ao GitHub), qual é o pacote atual para o console, o que já foi confirmado, o que falta testar
+> e os problemas abertos em ordem de valor.
+
 # Contexto do projeto (handoff do Antigravity → Claude Code, 23/10/2026)
 
 Port do **Median XL Σ 2.14.6** (sobre Diablo II LoD 1.13c) para **Nintendo Switch (Atmosphère)** rodando no
@@ -140,3 +144,10 @@ Feito em 23/10 (validado no Ryujinx, **aguardando teste no console**) — detalh
   (`run_script_ryujinx.sh` aceita `INI_SET="Secao.Chave=valor"` e `PRE_RUN`). Os logs do console saem pelo MTP do DBI
   (`/run/user/1000/gvfs/mtp:host=.../1: Cartão SD/...`), inclusive o `autorun_runtime.log`.
 
+## 30/10/2026 — log do console com a luz baixa (detalhes: D2PAD_CHANGES O)
+- Confirmado no console: luz baixa criada no 1º boot, 55-60 FPS fora de carga (cidade + Blood Moor), thread principal em 20-48% de um núcleo, GL preso no vsync (~16,4 ms).
+  Sobram congelamentos de 1,1-1,5 s na troca de área e ~15 s de travadinhas de 50-130 ms em área nova, que acompanham a leitura do SD (r = 0,78 com `sd_ms`).
+  O cache de SD é fixo no `wine-nx-runtime.nro` do AUTORUN e não há toolchain para recompilá-lo aqui: sem alavanca no projeto.
+- Ainda não visto no console: combate pesado com luz baixa, andar + habilidade, barra de baixo (ZL) e Full Rejuvenation nos vendedores. Pedir ao usuário.
+- Pacote atual: `dist/d2-medianxl-autorun-switch-2.14.6-final.zip` (29/10; SHA256 em `docs/HANDOFF.md`). Nada mudou no jogo depois dele.
+- Logs do console: `python3 tools/coletar_logs_console.py "$(ls -d /run/user/1000/gvfs/mtp*)/1: Cartão SD"` (resumo de FPS + `tools/correlacionar_runtime_console.py`).
