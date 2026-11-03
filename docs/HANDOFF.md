@@ -103,6 +103,18 @@ campo 37-46, Stony Field 14-40; o custo é contínuo por quadro (mediana 61 ms n
   `BOX64_DYNAREC_ALIGNED_ATOMICS=1` derruba o jogo; `BIGBLOCK=0` é 25% mais lento, `BIGBLOCK=1` derrubou o Ryujinx uma vez em duas.
 - Se o `Game.box64.txt` der problema: apagar o arquivo (volta ao padrão). D2GL: `d2gl.fxaa=true`/`d2gl.sharpen=true` no `d2nx.ini`.
 
+## Ambiente atual: Gentoo (03/11/2026) — validado no Ryujinx
+- DLLs sem podman: `PATH=/mnt/STEAM/Projetos/devkit-tools/llvm-mingw/bin:$PATH sh src-d2nx/build.sh` (clang 23).
+  Importações só USER32/ADVAPI32/msvcrt/KERNEL32. Aceitação 17/17 com essas DLLs e 17/17 com as do pacote de 29/10 (gcc);
+  FPS igual (~60 no campo). D2NXPad 1.2.0 / D2Autorun 0.4.5 nas duas.
+- Ryujinx 1.3.3: `flatpak install --user flathub io.github.ryubing.Ryujinx`; `~/.local/bin/ryujinx` ->
+  `~/.local/share/flatpak/app/io.github.ryubing.Ryujinx/current/active/files/bin/Ryujinx` (roda fora do sandbox).
+- **`vm.max_map_count` >= 524288** (`/etc/sysctl.d/90-ryujinx.conf`). Com o padrão 65530 o Ryujinx abre um aviso e fica
+  parado: o log termina em `CheckLaunchState` e o teste sai sem `d2nxpad.log`.
+- Capturas sem ImageMagick: `~/.local/bin/import` é um script que faz `import -silent -window <id> <arquivo>` com
+  `ffmpeg -f x11grab -window_id` (a janela do Ryujinx é XWayland).
+- Chaves e firmware 22.5.0 do console do usuário já estão em `build/ryujinx-test/system` e `build/ryujinx-test/bis` (pasta real).
+
 ## Reconstruir o ambiente numa distro nova
 1. `git clone https://github.com/aeon1911/MedianXL-NX` (ou usar a pasta ja existente no disco STEAM).
 2. Ferramentas: podman (ou docker), python3, flatpak, ImageMagick (`import`) e xprop (capturas), gcc/g++ para
